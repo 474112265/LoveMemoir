@@ -140,6 +140,9 @@ function initTables() {
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN read_at DATETIME`);
   } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE photos ADD COLUMN media_type TEXT DEFAULT 'image'`);
+  } catch (e) {}
 
   // ==================== 种子数据初始化 ====================
   

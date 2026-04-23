@@ -320,7 +320,12 @@ function getContentType(ext) {
     '.png': 'image/png',
     '.gif': 'image/gif',
     '.webp': 'image/webp',
-    '.bmp': 'image/bmp'
+    '.bmp': 'image/bmp',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.avi': 'video/x-msvideo',
+    '.mkv': 'video/x-matroska'
   };
   return types[ext.toLowerCase()] || 'application/octet-stream';
 }

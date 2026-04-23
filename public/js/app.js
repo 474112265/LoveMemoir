@@ -1847,12 +1847,16 @@
       $('#albumViewOverlay').style.display = 'none';
       $('#albumViewImg').src = '';
       $('#albumViewLoading').style.display = 'none';
+      const viewVideo = $('#albumViewVideo');
+      if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
     });
     $('#albumViewOverlay').addEventListener('click', (e) => {
       if (e.target === $('#albumViewOverlay')) {
         $('#albumViewOverlay').style.display = 'none';
         $('#albumViewImg').src = '';
         $('#albumViewLoading').style.display = 'none';
+        const viewVideo = $('#albumViewVideo');
+        if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
       }
     });
   }
@@ -1945,48 +1949,89 @@
       const date = new Date(photo.created_at + 'Z');
       const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
       const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+      const isVideo = photo.media_type === 'video';
 
-      // 优先使用缩略图URL，若无缩略图则回退到原图URL
       const thumbnailUrl = photo.thumbnail_url
         ? authImageUrl(photo.thumbnail_url)
         : authImageUrl(photo.url);
-      // 原图URL存储在dataset中，点击时才加载
       const originalUrl = authImageUrl(photo.url);
 
-      html += `
-        <div class="album-photo-card" data-id="${photo.id}" data-original-url="${escapeHtml(originalUrl)}">
-          <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy">
-          <button class="album-photo-delete" data-album-delete="${photo.id}" title="删除">✕</button>
-          <div class="album-photo-info">
-            <div class="photo-uploader">${escapeHtml(photo.uploaded_by)}</div>
-            <div class="photo-date">${dateStr} ${timeStr}</div>
+      if (isVideo) {
+        html += `
+          <div class="album-photo-card" data-id="${photo.id}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="video">
+            <div class="album-video-wrapper">
+              <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy" class="album-video-thumb">
+              <div class="album-video-play-icon">▶</div>
+            </div>
+            <button class="album-photo-delete" data-album-delete="${photo.id}" title="删除">✕</button>
+            <div class="album-photo-info">
+              <div class="photo-uploader">${escapeHtml(photo.uploaded_by)}</div>
+              <div class="photo-date">${dateStr} ${timeStr}</div>
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      } else {
+        html += `
+          <div class="album-photo-card" data-id="${photo.id}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="image">
+            <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy">
+            <button class="album-photo-delete" data-album-delete="${photo.id}" title="删除">✕</button>
+            <div class="album-photo-info">
+              <div class="photo-uploader">${escapeHtml(photo.uploaded_by)}</div>
+              <div class="photo-date">${dateStr} ${timeStr}</div>
+            </div>
+          </div>
+        `;
+      }
     });
     html += '</div>';
     grid.innerHTML = html;
 
-    // 绑定点击查看大图事件：加载原图并显示加载动画
     grid.querySelectorAll('.album-photo-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (e.target.closest('[data-album-delete]')) return;
         const originalUrl = card.dataset.originalUrl;
-        const viewImg = $('#albumViewImg');
+        const mediaType = card.dataset.mediaType || 'image';
         const loadingEl = $('#albumViewLoading');
-        loadingEl.style.display = 'flex';
-        viewImg.style.opacity = '0';
-        viewImg.onload = () => {
-          loadingEl.style.display = 'none';
-          viewImg.style.opacity = '1';
-          viewImg.style.transition = 'opacity 0.3s ease';
-        };
-        viewImg.onerror = () => {
-          loadingEl.style.display = 'none';
-          viewImg.style.opacity = '1';
-        };
-        viewImg.src = originalUrl;
-        $('#albumViewOverlay').style.display = 'flex';
+
+        if (mediaType === 'video') {
+          const viewImg = $('#albumViewImg');
+          viewImg.style.display = 'none';
+          let viewVideo = $('#albumViewVideo');
+          if (!viewVideo) {
+            viewVideo = document.createElement('video');
+            viewVideo.id = 'albumViewVideo';
+            viewVideo.controls = true;
+            viewVideo.autoplay = true;
+            viewVideo.style.maxWidth = '90vw';
+            viewVideo.style.maxHeight = '85vh';
+            viewVideo.style.borderRadius = '8px';
+            $('#albumViewOverlay').querySelector('.image-view-container').insertBefore(viewVideo, viewImg);
+          }
+          viewVideo.style.display = 'block';
+          loadingEl.style.display = 'flex';
+          viewVideo.onloadeddata = () => { loadingEl.style.display = 'none'; };
+          viewVideo.onerror = () => { loadingEl.style.display = 'none'; };
+          viewVideo.src = originalUrl;
+          $('#albumViewOverlay').style.display = 'flex';
+        } else {
+          let viewVideo = $('#albumViewVideo');
+          if (viewVideo) { viewVideo.style.display = 'none'; viewVideo.src = ''; }
+          const viewImg = $('#albumViewImg');
+          viewImg.style.display = 'block';
+          loadingEl.style.display = 'flex';
+          viewImg.style.opacity = '0';
+          viewImg.onload = () => {
+            loadingEl.style.display = 'none';
+            viewImg.style.opacity = '1';
+            viewImg.style.transition = 'opacity 0.3s ease';
+          };
+          viewImg.onerror = () => {
+            loadingEl.style.display = 'none';
+            viewImg.style.opacity = '1';
+          };
+          viewImg.src = originalUrl;
+          $('#albumViewOverlay').style.display = 'flex';
+        }
       });
     });
 
@@ -2034,18 +2079,12 @@
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
 
-      if (!file.type.startsWith('image/')) {
+      const isImage = file.type.startsWith('image/');
+      const isVideo = file.type.startsWith('video/');
+      if (!isImage && !isVideo) {
         failCount++;
         progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
         progressText.textContent = `${i + 1}/${files.length} 上传中...`;
-        continue;
-      }
-
-      if (file.size > 20 * 1024 * 1024) {
-        failCount++;
-        progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
-        progressText.textContent = `${i + 1}/${files.length} 上传中...`;
-        showToast(`${file.name} 超过20MB限制`, 'error');
         continue;
       }
 

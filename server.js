@@ -64,6 +64,25 @@ const { authMiddleware, loginHandler, logoutHandler } = require('./auth');
 /** 自定义图片加密模块，提供AES加解密、批量加密迁移等功能 */
 const { encryptFile, streamDecryptedFile, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
 
+/** FFmpeg视频处理封装库，用于视频缩略图截取 */
+const ffmpeg = require('fluent-ffmpeg');
+
+/** 配置FFmpeg和FFprobe二进制路径（Windows必须显式指定） */
+const os = require('os');
+if (os.platform() === 'win32') {
+  try {
+    const { execSync } = require('child_process');
+    const ffmpegPath = execSync('where.exe ffmpeg', { encoding: 'utf8' }).trim().split('\n')[0].trim();
+    const ffprobePath = execSync('where.exe ffprobe', { encoding: 'utf8' }).trim().split('\n')[0].trim();
+    if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+    if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+    console.log(`✅ FFmpeg: ${ffmpegPath}`);
+    console.log(`✅ FFprobe: ${ffprobePath}`);
+  } catch (e) {
+    console.warn('⚠️ 未找到FFmpeg/FFprobe，视频缩略图功能将不可用');
+  }
+}
+
 /** 图片签名令牌HMAC密钥，独立于图片加密密钥 */
 const IMAGE_TOKEN_HMAC_KEY = process.env.IMAGE_TOKEN_HMAC_KEY || 'love-diary-image-token-hmac-key-2024';
 
@@ -106,6 +125,21 @@ if (!fs.existsSync(thumbnailDir)) {
 const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 
 /**
+ * 允许上传的视频文件扩展名白名单集合
+ * @type {Set<string>}
+ */
+const ALLOWED_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv']);
+
+/** 合并的媒体文件扩展名（图片+视频） */
+const ALLOWED_MEDIA_EXTENSIONS = new Set([...ALLOWED_IMAGE_EXTENSIONS, ...ALLOWED_VIDEO_EXTENSIONS]);
+
+/** 视频文件MIME类型白名单 */
+const ALLOWED_VIDEO_MIME_TYPES = new Set([
+  'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+  'video/x-matroska', 'video/avi'
+]);
+
+/**
  * 图片文件的Magic Bytes（文件头签名）映射表
  * 用于在服务端二次校验文件内容是否真实匹配声明的格式，
  * 防止攻击者通过修改扩展名绕过MIME类型检查。
@@ -121,73 +155,89 @@ const IMAGE_MAGIC_BYTES = {
 };
 
 /**
- * Multer聊天图片上传存储配置
+ * 视频文件的Magic Bytes（文件头签名）映射表
+ * 视频文件的Magic Bytes检测比图片更复杂，这里只做基础格式识别
+ * @type {Object<string, string>}
+ */
+const VIDEO_MAGIC_BYTES = {
+  'AAAA': '.mp4',     // MP4 ftyp box (base64 of 0x00000018/0x00000020)
+  'AAAAF': '.mp4',    // MP4 ftyp variant
+  '/1A': '.webm',     // WebM/MKV EBML header (1A 45 DF A3)
+  'AAAAIG': '.mov',   // QuickTime MOV
+  'RIFF': '.avi',     // AVI RIFF header
+  'RIFFo': '.avi'     // AVI RIFF variant
+};
+
+/** 合并的媒体文件Magic Bytes（图片+视频） */
+const MEDIA_MAGIC_BYTES = { ...IMAGE_MAGIC_BYTES, ...VIDEO_MAGIC_BYTES };
+
+/**
+ * Multer聊天媒体上传存储配置
  * 
- * 策略说明：
- * - 存储位置：uploadsDir 目录
- * - 文件命名规则：img_时间戳_随机hex.扩展名
- * - 大小限制：5MB（适用于聊天场景的小尺寸图片）
+ * 支持图片和视频文件上传
+ * 文件命名规则：img_时间戳_随机hex.扩展名
  */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-      return cb(new Error('不支持的图片格式'));
+    if (!ALLOWED_MEDIA_EXTENSIONS.has(ext)) {
+      return cb(new Error('不支持的媒体格式'));
     }
-    // 使用时间戳+随机数确保文件名唯一且不可预测
-    const name = `img_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
+    const prefix = ALLOWED_IMAGE_EXTENSIONS.has(ext) ? 'img' : 'video';
+    const name = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
     cb(null, name);
   }
 });
 
-/** 配置好的Multer聊天图片上传中间件实例 */
+/** 配置好的Multer聊天媒体上传中间件实例 */
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 单文件最大5MB
+  limits: { fileSize: Infinity },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    // 双重校验：扩展名 + MIME类型
-    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-      return cb(new Error('不支持的图片格式'));
+    const isImage = ALLOWED_IMAGE_EXTENSIONS.has(ext);
+    const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
+    if (!isImage && !isVideo) {
+      return cb(new Error('不支持的媒体格式'));
     }
-    if (!file.mimetype.startsWith('image/')) {
-      return cb(new Error('只允许上传图片文件'));
+    if (!file.mimetype.startsWith('image/') && !ALLOWED_VIDEO_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error('只允许上传图片或视频文件'));
     }
     cb(null, true);
   }
 });
 
 /**
- * Multer相册图片上传存储配置
- * 与聊天上传的区别：
- * - 存储到 albumDir（独立目录）
- * - 文件前缀用 "album_" 区分
- * - 大小限制放宽到20MB（保留原始分辨率和质量）
+ * Multer相册媒体上传存储配置
+ * 支持图片和视频文件上传，存储到 albumDir
  */
 const albumStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, albumDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-      return cb(new Error('不支持的图片格式'));
+    if (!ALLOWED_MEDIA_EXTENSIONS.has(ext)) {
+      return cb(new Error('不支持的媒体格式'));
     }
-    const name = `album_${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`;
+    const prefix = ALLOWED_IMAGE_EXTENSIONS.has(ext) ? 'album' : 'album_video';
+    const name = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`;
     cb(null, name);
   }
 });
 
-/** 配置好的Multer相册图片上传中间件实例 */
+/** 配置好的Multer相册媒体上传中间件实例 */
 const albumUpload = multer({
   storage: albumStorage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 相册图片允许最大20MB
+  limits: { fileSize: Infinity },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-      return cb(new Error('不支持的图片格式'));
+    const isImage = ALLOWED_IMAGE_EXTENSIONS.has(ext);
+    const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
+    if (!isImage && !isVideo) {
+      return cb(new Error('不支持的媒体格式'));
     }
-    if (!file.mimetype.startsWith('image/')) {
-      return cb(new Error('只允许上传图片文件'));
+    if (!file.mimetype.startsWith('image/') && !ALLOWED_VIDEO_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error('只允许上传图片或视频文件'));
     }
     cb(null, true);
   }
@@ -761,17 +811,19 @@ function isValidImageUrl(url) {
 app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'), (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: '请选择图片' });
+      return res.status(400).json({ error: '请选择文件' });
     }
 
     const filePath = req.file.path;
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
 
     try {
       const buffer = fs.readFileSync(filePath);
       const base64Head = buffer.toString('base64', 0, Math.min(buffer.length, 8));
 
       let validMagic = false;
-      for (const [magic, ext] of Object.entries(IMAGE_MAGIC_BYTES)) {
+      for (const [magic] of Object.entries(MEDIA_MAGIC_BYTES)) {
         if (base64Head.startsWith(magic)) {
           validMagic = true;
           break;
@@ -780,16 +832,16 @@ app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'
 
       if (!validMagic) {
         fs.unlinkSync(filePath);
-        return res.status(400).json({ error: '文件内容与图片格式不匹配' });
+        return res.status(400).json({ error: '文件内容与格式不匹配' });
       }
 
       if (!encryptFile(filePath)) {
         fs.unlinkSync(filePath);
-        return res.status(500).json({ error: '图片加密失败' });
+        return res.status(500).json({ error: '文件加密失败' });
       }
 
-      const imageUrl = `/uploads/${req.file.filename}`;
-      res.json({ url: imageUrl });
+      const mediaUrl = `/uploads/${req.file.filename}`;
+      res.json({ url: mediaUrl, media_type: isVideo ? 'video' : 'image' });
     } catch (readErr) {
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
@@ -797,8 +849,8 @@ app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'
       res.status(500).json({ error: '文件处理失败' });
     }
   } catch (err) {
-    console.error('上传图片失败:', err);
-    res.status(500).json({ error: '上传图片失败' });
+    console.error('上传文件失败:', err);
+    res.status(500).json({ error: '上传文件失败' });
   }
 });
 
@@ -1021,18 +1073,21 @@ app.use('/album', serveEncryptedImage(albumDir));
 // ========== 相册 API ==========
 
 /**
- * 从加密原图生成缩略图并缓存到磁盘
- * 
- * 生成流程：
- * 1. 检查缩略图缓存是否存在（存在则直接返回路径）
- * 2. 读取加密的原图文件到内存
- * 3. 使用 AES-CBC 解密得到明文图片Buffer
- * 4. 用 sharp 库将图片缩放到 300×300（cover裁切模式）
- * 5. 输出为 JPEG 格式（质量70%）写入缩略图缓存目录
- * 
+ * 为相册中的加密文件（图片/视频）生成缩略图
+ *
+ * 处理流程：
+ * 1. 检查缓存目录是否已有该文件的加密缩略图
+ * 2. 若有缓存且能正确解密，直接返回解密后的Buffer（避免重复计算）
+ * 3. 若无缓存或缓存失效：
+ *    a. 读取相册目录下的加密文件到内存
+ *    b. 使用 AES-CBC 解密得到明文数据Buffer
+ *    c. 图片：用 sharp 库将图片缩放到 300×300（cover裁切模式），输出JPEG格式
+ *    d. 视频：用 ffmpeg 在第1秒处截取帧 → sharp 压缩为 300×300 JPEG
+ * 4. 加密缩略图并写入缓存目录
+ *
  * @async
- * @param {string} filename - 相册中的加密图片文件名
- * @returns {Promise<string|null>} 缩略图的磁盘绝对路径；失败返回null
+ * @param {string} filename - 相册中的加密文件名
+ * @returns {Promise<Buffer|null>} 缩略图的明文Buffer；失败返回null
  */
 async function generateThumbnail(filename) {
   const sourcePath = path.join(albumDir, filename);
@@ -1040,6 +1095,8 @@ async function generateThumbnail(filename) {
 
   const thumbFilename = `thumb_${filename}`;
   const thumbPath = path.join(thumbnailDir, thumbFilename);
+  const ext = path.extname(filename).toLowerCase();
+  const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
 
   try {
     const { decryptBuffer, encryptBuffer, isEncrypted } = require('./image-crypto');
@@ -1058,10 +1115,86 @@ async function generateThumbnail(filename) {
     const decryptedBuffer = decryptBuffer(encryptedBuffer);
     if (!decryptedBuffer) return null;
 
-    const thumbBuffer = await sharp(decryptedBuffer)
-      .resize(300, 300, { fit: 'cover', position: 'center' })
-      .jpeg({ quality: 70 })
-      .toBuffer();
+    let thumbBuffer;
+
+    if (isVideo) {
+      thumbBuffer = await new Promise((resolve, reject) => {
+        const ts = Date.now();
+        const rnd = crypto.randomBytes(4).toString('hex');
+        const tempVideoPath = path.join(thumbnailDir, `temp_video_${ts}_${rnd}${ext}`);
+        const frameFilename = `temp_frame_${ts}_${rnd}.png`;
+        const framePath = path.join(thumbnailDir, frameFilename);
+        let settled = false;
+        let ffmpegProc = null;
+
+        function cleanup() {
+          try { if (fs.existsSync(tempVideoPath)) fs.unlinkSync(tempVideoPath); } catch (_) {}
+          try { if (fs.existsSync(framePath)) fs.unlinkSync(framePath); } catch (_) {}
+        }
+
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try { if (ffmpegProc) ffmpegProc.kill('SIGKILL'); } catch (_) {}
+          cleanup();
+          reject(new Error('视频缩略图生成超时（30秒）'));
+        }, 30000);
+
+        try {
+          fs.writeFileSync(tempVideoPath, decryptedBuffer);
+
+          ffmpegProc = ffmpeg(tempVideoPath)
+            .inputOptions('-ss', '00:00:01')
+            .outputOptions([
+              '-vframes', '1',
+              '-vf', 'scale=300:-2',
+              '-pix_fmt', 'rgb24',
+              '-f', 'image2'
+            ])
+            .output(framePath)
+            .on('end', async () => {
+              if (settled) return;
+              clearTimeout(timeout);
+              try {
+                if (!fs.existsSync(framePath)) {
+                  settled = true;
+                  cleanup();
+                  return reject(new Error('ffmpeg未生成帧文件'));
+                }
+                const frameBuffer = await sharp(framePath)
+                  .resize(300, 300, { fit: 'cover', position: 'center' })
+                  .jpeg({ quality: 70 })
+                  .toBuffer();
+                settled = true;
+                cleanup();
+                resolve(frameBuffer);
+              } catch (sharpErr) {
+                settled = true;
+                cleanup();
+                reject(sharpErr);
+              }
+            })
+            .on('error', (err) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              cleanup();
+              reject(err);
+            })
+            .run();
+        } catch (setupErr) {
+          settled = true;
+          clearTimeout(timeout);
+          cleanup();
+          reject(setupErr);
+        }
+      });
+    } else {
+      thumbBuffer = await sharp(decryptedBuffer)
+        .resize(300, 300, { fit: 'cover', position: 'center' })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+    }
 
     const encryptedThumb = encryptBuffer(thumbBuffer);
     fs.writeFileSync(thumbPath, encryptedThumb);
@@ -1083,7 +1216,7 @@ app.get('/api/album', authMiddleware, (req, res) => {
   try {
     const db = getDb();
     const photos = db.prepare(
-      'SELECT id, filename, original_name, file_size, uploaded_by, created_at FROM photos ORDER BY created_at DESC'
+      'SELECT id, filename, original_name, file_size, uploaded_by, created_at, media_type FROM photos ORDER BY created_at DESC'
     ).all();
     // 为每张照片附加访问URL和缩略图URL
     res.json(photos.map(p => ({
@@ -1109,15 +1242,19 @@ app.get('/api/album', authMiddleware, (req, res) => {
 app.post('/api/album/upload', authMiddleware, validateCsrfToken, albumUpload.single('image'), (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: '请选择图片' });
+      return res.status(400).json({ error: '请选择文件' });
     }
 
     const filePath = req.file.path;
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
+    const mediaType = isVideo ? 'video' : 'image';
+
     const buffer = fs.readFileSync(filePath);
     const base64Head = buffer.toString('base64', 0, Math.min(buffer.length, 8));
 
     let validMagic = false;
-    for (const [magic] of Object.entries(IMAGE_MAGIC_BYTES)) {
+    for (const [magic] of Object.entries(MEDIA_MAGIC_BYTES)) {
       if (base64Head.startsWith(magic)) {
         validMagic = true;
         break;
@@ -1126,31 +1263,32 @@ app.post('/api/album/upload', authMiddleware, validateCsrfToken, albumUpload.sin
 
     if (!validMagic) {
       fs.unlinkSync(filePath);
-      return res.status(400).json({ error: '文件内容与图片格式不匹配' });
+      return res.status(400).json({ error: '文件内容与格式不匹配' });
     }
 
     if (!encryptFile(filePath)) {
       fs.unlinkSync(filePath);
-      return res.status(500).json({ error: '图片加密失败' });
+      return res.status(500).json({ error: '文件加密失败' });
     }
 
     const db = getDb();
     const uploadedBy = req.user.display_name || 'Unknown';
-    const result = db.prepare(
-      'INSERT INTO photos (filename, original_name, file_size, file_path, uploaded_by) VALUES (?, ?, ?, ?, ?)'
-    ).run(req.file.filename, req.file.originalname, req.file.size, req.file.path, uploadedBy);
 
-    // 返回完整的照片记录（含自增ID）
+    db.prepare(
+      `INSERT INTO photos (filename, original_name, file_size, file_path, uploaded_by, media_type) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(req.file.filename, req.file.originalname, req.file.size, req.file.path, uploadedBy, mediaType);
+
     const photo = db.prepare(
-      'SELECT id, filename, original_name, file_size, uploaded_by, created_at FROM photos WHERE id = ?'
-    ).get(result.lastInsertRowid);
+      'SELECT id, filename, original_name, file_size, uploaded_by, created_at, media_type FROM photos WHERE id = ?'
+    ).get(db.prepare('SELECT last_insert_rowid() as id').get().id);
 
     res.status(201).json({
       ...photo,
-      url: `/album/${photo.filename}`
+      url: `/album/${photo.filename}`,
+      media_type: mediaType
     });
   } catch (err) {
-    console.error('上传相册图片失败:', err);
+    console.error('上传相册媒体失败:', err);
     res.status(500).json({ error: '上传相册图片失败' });
   }
 });
