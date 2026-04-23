@@ -199,6 +199,104 @@
     return res;
   }
 
+  /**
+   * 带真实上传进度的HTTP请求（基于XMLHttpRequest）
+   *
+   * fetch API不支持upload.onprogress事件，无法获取真实的上传字节进度。
+   * 此函数使用XMLHttpRequest实现，通过upload.onprogress回调实时报告上传进度。
+   *
+   * @param {string} url - 请求URL
+   * @param {FormData} formData - 表单数据（文件等）
+   * @param {Object} [options] - 配置选项
+   * @param {Function} [options.onProgress] - 进度回调 function({loaded, total, percent, speed})
+   * @returns {Promise<{ok: boolean, status: number, json: Object}>} 响应结果
+   */
+  function uploadWithProgress(url, formData, options = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+
+      if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+      if (csrfToken) xhr.setRequestHeader('x-csrf-token', csrfToken);
+
+      let lastTime = Date.now();
+      let lastLoaded = 0;
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && options.onProgress) {
+          const now = Date.now();
+          const dt = now - lastTime;
+          const dl = e.loaded - lastLoaded;
+          const speed = dt > 0 ? Math.round(dl / dt * 1000) : 0;
+          lastTime = now;
+          lastLoaded = e.loaded;
+
+          options.onProgress({
+            loaded: e.loaded,
+            total: e.total,
+            percent: Math.round((e.loaded / e.total) * 100),
+            speed: speed
+          });
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 403) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.error && data.error.includes('CSRF')) {
+              fetchCsrfToken().then(() => {
+                if (csrfToken) {
+                  const retryXhr = new XMLHttpRequest();
+                  retryXhr.open('POST', url);
+                  retryXhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+                  retryXhr.setRequestHeader('x-csrf-token', csrfToken);
+                  retryXhr.onload = () => {
+                    resolve({
+                      ok: retryXhr.status >= 200 && retryXhr.status < 300,
+                      status: retryXhr.status,
+                      json: () => Promise.resolve(JSON.parse(retryXhr.responseText))
+                    });
+                  };
+                  retryXhr.onerror = () => reject(new Error('网络请求失败'));
+                  retryXhr.send(formData);
+                } else {
+                  resolve({ ok: false, status: xhr.status, json: () => Promise.resolve(data) });
+                }
+              }).catch(() => {
+                resolve({ ok: false, status: xhr.status, json: () => Promise.resolve(data) });
+              });
+              return;
+            }
+          } catch (_) {}
+        }
+
+        resolve({
+          ok: xhr.status >= 200 && xhr.status < 300,
+          status: xhr.status,
+          json: () => Promise.resolve(JSON.parse(xhr.responseText))
+        });
+      };
+
+      xhr.onerror = () => reject(new Error('网络请求失败'));
+      xhr.send(formData);
+    });
+  }
+
+  /** 格式化文件大小为人类可读字符串 */
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  /** 格式化传输速度为人类可读字符串 */
+  function formatSpeed(bytesPerSec) {
+    if (bytesPerSec < 1024) return bytesPerSec + ' B/s';
+    if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+    return (bytesPerSec / (1024 * 1024)).toFixed(1) + ' MB/s';
+  }
+
   // ==================== 初始化入口 ====================
 
   /**
@@ -554,23 +652,43 @@
     const file = e.target.files[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      showToast('请选择图片文件', 'error');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('图片大小不能超过5MB', 'error');
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      showToast('请选择图片或视频文件', 'error');
       return;
     }
 
     pendingImageFile = file;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      $('#imagePreviewImg').src = ev.target.result;
+
+    if (isVideo) {
+      const previewImg = $('#imagePreviewImg');
+      previewImg.style.display = 'none';
+      let previewVideo = $('#imagePreviewVideo');
+      if (!previewVideo) {
+        previewVideo = document.createElement('video');
+        previewVideo.id = 'imagePreviewVideo';
+        previewVideo.controls = true;
+        previewVideo.style.maxWidth = '80vw';
+        previewVideo.style.maxHeight = '60vh';
+        previewVideo.style.borderRadius = '8px';
+        previewImg.parentNode.insertBefore(previewVideo, previewImg);
+      }
+      previewVideo.style.display = 'block';
+      previewVideo.src = URL.createObjectURL(file);
       $('#imagePreviewOverlay').style.display = 'flex';
-    };
-    reader.readAsDataURL(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const previewImg = $('#imagePreviewImg');
+        previewImg.style.display = 'block';
+        let previewVideo = $('#imagePreviewVideo');
+        if (previewVideo) { previewVideo.style.display = 'none'; URL.revokeObjectURL(previewVideo.src); }
+        previewImg.src = ev.target.result;
+        $('#imagePreviewOverlay').style.display = 'flex';
+      };
+      reader.readAsDataURL(file);
+    }
     e.target.value = '';
   }
 
@@ -605,36 +723,38 @@
 
     const confirmBtn = $('#confirmImageSend');
     confirmBtn.disabled = true;
-    confirmBtn.textContent = '发送中...';
+    confirmBtn.textContent = '上传 0%...';
 
     try {
-      // 步骤一：上传图片文件到服务端
       const formData = new FormData();
       formData.append('image', pendingImageFile);
 
-      const uploadRes = await safeFetch(`${API_BASE}/api/upload`, {
-        method: 'POST',
-        body: formData
+      const uploadRes = await uploadWithProgress(`${API_BASE}/api/upload`, formData, {
+        onProgress: (prog) => {
+          confirmBtn.textContent = `上传 ${prog.percent}% (${formatSpeed(prog.speed)})`;
+        }
       });
 
       if (!uploadRes.ok) {
         const data = await uploadRes.json();
-        showToast(data.error || '图片上传失败', 'error');
+        showToast(data.error || '上传失败', 'error');
         return;
       }
 
-      const { url: imageUrl } = await uploadRes.json();
+      confirmBtn.textContent = '发送中...';
+      const { url: imageUrl, media_type: mediaType } = await uploadRes.json();
 
-      // 步骤二：用图片URL创建消息记录
+      const msgContent = mediaType === 'video' ? '🎬 视频' : '📷 图片';
+
       const msgRes = await safeFetch(`${API_BASE}/api/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          content: '📷 图片',
+          content: msgContent,
           sender: selectedSender,
-          message_type: 'image',
+          message_type: mediaType === 'video' ? 'video' : 'image',
           image_url: imageUrl
         })
       });
@@ -649,9 +769,9 @@
       messagesCache.push(newMsg);
       renderMessages(messagesCache);
       closeImagePreview();
-      showToast('图片已发送', 'success');
+      showToast(mediaType === 'video' ? '视频已发送' : '图片已发送', 'success');
     } catch (err) {
-      showToast('发送失败，请检查网络', 'error');
+      showToast(`发送失败: ${err.message}`, 'error');
     } finally {
       confirmBtn.disabled = false;
       confirmBtn.textContent = '发送 💕';
@@ -2046,18 +2166,18 @@
   }
 
   /**
-   * 处理相册图片批量上传
-   * 
-   * 支持一次选择多张图片，逐张上传到服务端相册接口。
-   * 上传过程显示进度条（按文件数量比例推进）。
-   * 
-   * 校验规则：
-   * - 仅接受image/* MIME类型的文件
-   * - 单张图片大小不超过20MB
-   * 
+   * 处理相册媒体批量上传（支持图片+视频）
+   *
+   * 支持一次选择多张图片/视频，逐个上传到服务端相册接口。
+   * 上传过程显示真实字节级进度条（基于XMLHttpRequest upload.onprogress）。
+   *
+   * 进度条逻辑：
+   * - 总进度 = 所有文件已上传字节数之和 / 所有文件总大小
+   * - 每个文件上传时实时更新：当前文件名、百分比、传输速度
+   *
    * 全部完成后汇总成功/失败数量并给出Toast提示，
    * 有成功时自动刷新相册列表。
-   * 
+   *
    * @param {Event} e - 文件input元素的change事件对象
    * @returns {Promise<void>}
    */
@@ -2071,52 +2191,68 @@
 
     progressContainer.style.display = 'flex';
     progressBar.style.width = '0%';
-    progressText.textContent = `0/${files.length} 上传中...`;
+    progressText.textContent = '准备上传...';
 
+    const validFiles = files.filter(f => {
+      return f.type.startsWith('image/') || f.type.startsWith('video/');
+    });
+
+    if (validFiles.length === 0) {
+      progressContainer.style.display = 'none';
+      showToast('没有可上传的文件', 'error');
+      return;
+    }
+
+    const totalSize = validFiles.reduce((sum, f) => sum + f.size, 0);
+    let uploadedBytes = 0;
     let successCount = 0;
     let failCount = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-
-      const isImage = file.type.startsWith('image/');
-      const isVideo = file.type.startsWith('video/');
-      if (!isImage && !isVideo) {
-        failCount++;
-        progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
-        progressText.textContent = `${i + 1}/${files.length} 上传中...`;
-        continue;
-      }
+    for (let i = 0; i < validFiles.length; i++) {
+      const file = validFiles[i];
+      const shortName = file.name.length > 20 ? file.name.slice(0, 17) + '...' : file.name;
 
       try {
         const formData = new FormData();
         formData.append('image', file);
 
-        const uploadRes = await safeFetch(`${API_BASE}/api/album/upload`, {
-          method: 'POST',
-          body: formData
+        const uploadRes = await uploadWithProgress(`${API_BASE}/api/album/upload`, formData, {
+          onProgress: (prog) => {
+            const prevFileBytes = validFiles.slice(0, i).reduce((s, f) => s + f.size, 0);
+            const overallLoaded = prevFileBytes + prog.loaded;
+            const overallPercent = Math.round((overallLoaded / totalSize) * 100);
+            progressBar.style.width = `${Math.min(overallPercent, 98)}%`;
+            progressText.textContent = `[${i + 1}/${validFiles.length}] ${shortName} ${prog.percent}% (${formatSpeed(prog.speed)})`;
+          }
         });
 
         if (!uploadRes.ok) {
           const data = await uploadRes.json().catch(() => ({}));
           showToast(data.error || `${file.name} 上传失败`, 'error');
           failCount++;
+          uploadedBytes += file.size;
         } else {
           successCount++;
+          uploadedBytes += file.size;
         }
       } catch (err) {
-        showToast(`${file.name} 上传失败`, 'error');
+        showToast(`${file.name} 上传失败: ${err.message}`, 'error');
         failCount++;
+        uploadedBytes += file.size;
       }
 
-      progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
-      progressText.textContent = `${i + 1}/${files.length} 上传中...`;
+      progressBar.style.width = `${Math.round((uploadedBytes / totalSize) * 100)}%`;
     }
 
-    progressContainer.style.display = 'none';
+    progressBar.style.width = '100%';
+    progressText.textContent = '上传完成！';
+
+    setTimeout(() => {
+      progressContainer.style.display = 'none';
+    }, 800);
 
     if (successCount > 0) {
-      showToast(`成功上传 ${successCount} 张照片 💕`, 'success');
+      showToast(`成功上传 ${successCount} 个文件 💕`, 'success');
       loadAlbumPhotos();
     }
 
