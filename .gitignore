@@ -1,0 +1,15 @@
+# 依赖目录
+node_modules/
+
+# 工作区配置
+.workbuddy/
+
+# 数据目录（保留文件夹，只忽略文件）
+data/*
+!data/
+
+# 如果 data 目录下有子目录需要保留，可以这样写：
+# data/*                   # 忽略 data 下所有文件
+# !data/uploads/           # 但保留 uploads 子目录
+# !data/album/            # 但保留 album 子目录
+# !data/thumbnails/       # 但保留 thumbnails 子目录
