@@ -1951,6 +1951,52 @@ html, body {
   background: rgba(0, 0, 0, 0.7);
 }
 
+.video-view-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.video-view-wrapper video {
+  display: block;
+  border-radius: 8px;
+}
+
+.video-buffer-bar {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+  min-width: 100px;
+  text-align: center;
+  transition: opacity 0.3s ease;
+}
+
+.video-buffer-bar .video-buffer-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ff6b9d, #c44569);
+  border-radius: 1px;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+.video-buffer-bar .video-buffer-text {
+  position: relative;
+  z-index: 1;
+}
+
 /* ========== 相册空状态 ========== */
 .album-empty {
   display: flex;

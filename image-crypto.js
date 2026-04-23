@@ -191,20 +191,78 @@ function decryptFileToBuffer(filePath) {
  */
 function streamDecryptedFile(filePath, res, contentType) {
   try {
-    // 读取加密文件到内存
     const buffer = fs.readFileSync(filePath);
-    
-    // 执行解密
     const decrypted = decryptBuffer(buffer);
-    
-    // 设置响应头并发送解密后的数据
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', decrypted.length);
     res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Accept-Ranges', 'bytes');
     res.end(decrypted);
     return true;
   } catch (e) {
     console.error(`流式解密失败 ${filePath}:`, e.message);
+    return false;
+  }
+}
+
+/**
+ * 支持HTTP Range请求的流式解密（用于视频渐进式加载/seek）
+ *
+ * 浏览器播放视频时会发送Range头（如 "bytes=0-1023"）实现：
+ * - 渐进式加载：先下载前几MB即可开始播放，同时后台继续缓冲
+ * - Seek跳转：用户拖动进度条时只请求需要的字节范围
+ *
+ * 实现方式：先完整解密到内存，再根据Range头截取对应字节段返回。
+ * 对于超大文件可后续优化为真正的流式分块解密。
+ *
+ * @param {string} filePath - 加密文件路径
+ * @param {import('http').ServerResponse} res - Express响应对象
+ * @param {string} contentType - MIME类型
+ * @returns {boolean} 是否成功处理
+ */
+function streamDecryptedFileWithRange(filePath, res, req, contentType) {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const decrypted = decryptBuffer(buffer);
+    const fileSize = decrypted.length;
+
+    const rangeHeader = req.headers.range;
+    if (!rangeHeader) {
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end(decrypted);
+      return true;
+    }
+
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10) || 0;
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunkSize = end - start + 1;
+
+    if (start >= fileSize) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${fileSize}`,
+        'Content-Type': contentType
+      });
+      res.end();
+      return true;
+    }
+
+    const chunk = decrypted.subarray(start, end + 1);
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': contentType,
+      'Cache-Control': 'private, no-store'
+    });
+    res.end(chunk);
+    return true;
+  } catch (e) {
+    console.error(`Range流式解密失败 ${filePath}:`, e.message);
     return false;
   }
 }
@@ -336,6 +394,7 @@ module.exports = {
   encryptFile,
   decryptFileToBuffer,
   streamDecryptedFile,
+  streamDecryptedFileWithRange,
   isEncrypted,
   encryptDirectory,
   getContentType

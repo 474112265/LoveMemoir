@@ -62,7 +62,7 @@ const { getDb } = require('./database');
 const { authMiddleware, loginHandler, logoutHandler } = require('./auth');
 
 /** 自定义图片加密模块，提供AES加解密、批量加密迁移等功能 */
-const { encryptFile, streamDecryptedFile, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
+const { encryptFile, streamDecryptedFile, streamDecryptedFileWithRange, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
 
 /** FFmpeg视频处理封装库，用于视频缩略图截取 */
 const ffmpeg = require('fluent-ffmpeg');
@@ -953,9 +953,16 @@ function serveEncryptedImage(baseDir) {
 
     const ext = path.extname(req.path).toLowerCase();
     const contentType = getContentType(ext);
+    const isVideoFile = ALLOWED_VIDEO_EXTENSIONS.has(ext);
 
-    if (!streamDecryptedFile(resolvedPath, res, contentType)) {
-      return res.status(500).send('Decryption failed');
+    if (isVideoFile) {
+      if (!streamDecryptedFileWithRange(resolvedPath, res, req, contentType)) {
+        return res.status(500).send('Decryption failed');
+      }
+    } else {
+      if (!streamDecryptedFile(resolvedPath, res, contentType)) {
+        return res.status(500).send('Decryption failed');
+      }
     }
   };
 }
@@ -1057,10 +1064,30 @@ app.get('/api/album/thumbnail/:id', async (req, res) => {
       res.setHeader('Content-Length', thumbBuffer.length);
       res.end(thumbBuffer);
     } else {
-      const sourcePath = path.join(albumDir, filename);
       const ext = path.extname(filename).toLowerCase();
-      const contentType = getContentType(ext);
-      return streamDecryptedFile(sourcePath, res, contentType);
+      const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
+
+      if (isVideo) {
+        console.warn(`⚠️ 视频缩略图生成失败，返回占位图: ${filename}`);
+        const placeholderPng = Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAYAAADDhn8LAAAACXBIWXMAAAsTAAALEwEAmpwYAAAA' +
+          'GXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyJpVFh0WE1MOmNvbS5hZG9i' +
+          'ZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5U' +
+          'Y3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9' +
+          'IkFkb2JlIFhNUCBDb3JlIDUuMy1jMDExIdY03JTVFIgIGVuZCB0aXR0aCBwaW5nLmNvcHku' +
+          'cG9ziZGFFakNDvUUMAAAGASURBVHja7NixAcAgDAgFXsG+v0xBaZGbcqoRBO0d/AAAAAElF' +
+          'TkSuQmCC',
+          'base64'
+        );
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.end(placeholderPng);
+      } else {
+        console.warn(`⚠️ 图片缩略图生成失败，返回原图: ${filename}`);
+        const sourcePath = path.join(albumDir, filename);
+        const contentType = getContentType(ext);
+        return streamDecryptedFile(sourcePath, res, contentType);
+      }
     }
   } catch (err) {
     console.error('获取缩略图失败:', err);

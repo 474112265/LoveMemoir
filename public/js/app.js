@@ -2121,17 +2121,86 @@
             viewVideo = document.createElement('video');
             viewVideo.id = 'albumViewVideo';
             viewVideo.controls = true;
-            viewVideo.autoplay = true;
+            viewVideo.preload = 'metadata';
+            viewVideo.playsInline = true;
             viewVideo.style.maxWidth = '90vw';
             viewVideo.style.maxHeight = '85vh';
             viewVideo.style.borderRadius = '8px';
-            $('#albumViewOverlay').querySelector('.image-view-container').insertBefore(viewVideo, viewImg);
+            viewVideo.style.display = 'block';
+
+            const bufferBar = document.createElement('div');
+            bufferBar.id = 'albumViewBufferBar';
+            bufferBar.className = 'video-buffer-bar';
+            bufferBar.innerHTML = '<div class="video-buffer-fill"></div><span class="video-buffer-text">加载中...</span>';
+            const container = document.createElement('div');
+            container.className = 'video-view-wrapper';
+            container.appendChild(viewVideo);
+            container.appendChild(bufferBar);
+            $('#albumViewOverlay').querySelector('.image-view-container').insertBefore(container, viewImg);
           }
           viewVideo.style.display = 'block';
           loadingEl.style.display = 'flex';
-          viewVideo.onloadeddata = () => { loadingEl.style.display = 'none'; };
-          viewVideo.onerror = () => { loadingEl.style.display = 'none'; };
+
+          const bufferBar = $('#albumViewBufferBar');
+          const bufferFill = bufferBar ? bufferBar.querySelector('.video-buffer-fill') : null;
+          const bufferText = bufferBar ? bufferBar.querySelector('.video-buffer-text') : null;
+
+          function showBuffering(msg) {
+            if (bufferBar) { bufferBar.style.display = 'block'; }
+            if (bufferText) { bufferText.textContent = msg || '缓冲中...'; }
+          }
+
+          function hideBuffering() {
+            if (bufferBar) { bufferBar.style.display = 'none'; }
+          }
+
+          function updateBufferPercent(percent) {
+            if (bufferFill) { bufferFill.style.width = Math.min(percent, 100) + '%'; }
+            if (bufferText && percent < 100) {
+              bufferText.textContent = `缓冲 ${Math.round(percent)}%`;
+            } else if (bufferText) {
+              bufferText.textContent = '就绪';
+            }
+          }
+
+          viewVideo.onloadedmetadata = () => {
+            loadingEl.style.display = 'none';
+            showBuffering('准备播放...');
+            viewVideo.play().catch(() => {});
+          };
+
+          viewVideo.onprogress = () => {
+            if (viewVideo.buffered.length > 0 && viewVideo.duration > 0) {
+              const bufferedEnd = viewVideo.buffered.end(viewVideo.buffered.length - 1);
+              const percent = (bufferedEnd / viewVideo.duration) * 100;
+              updateBufferPercent(percent);
+            }
+          };
+
+          viewVideo.oncanplay = () => {
+            hideBuffering();
+          };
+
+          viewVideo.onplaying = () => {
+            hideBuffering();
+          };
+
+          viewVideo.onwaiting = () => {
+            showBuffering('缓冲中...');
+          };
+
+          viewVideo.onstalled = () => {
+            showBuffering('网络缓慢，等待中...');
+          };
+
+          viewVideo.onerror = () => {
+            loadingEl.style.display = 'none';
+            hideBuffering();
+            showToast('视频加载失败', 'error');
+          };
+
           viewVideo.src = originalUrl;
+          viewVideo.load();
           $('#albumViewOverlay').style.display = 'flex';
         } else {
           let viewVideo = $('#albumViewVideo');
