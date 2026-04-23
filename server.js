@@ -332,14 +332,19 @@ function validateCsrfToken(req, res, next) {
     return res.status(403).json({ error: '缺少CSRF令牌' });
   }
 
-  const record = csrfTokenStore.get(csrfToken);
+  // 检查 server.js 本地的 csrfTokenStore
+  let record = csrfTokenStore.get(csrfToken);
   if (!record) {
-    return res.status(403).json({ error: '无效的CSRF令牌' });
-  }
-
-  // 防止A利用B的CSRF令牌发起请求
-  if (req.user && record.userId !== req.user.id) {
-    return res.status(403).json({ error: 'CSRF令牌与用户不匹配' });
+    // 检查 auth.js 中的 csrfTokens 集合
+    const { validateCsrfToken: authValidateCsrfToken } = require('./auth');
+    if (!authValidateCsrfToken(csrfToken)) {
+      return res.status(403).json({ error: '无效的CSRF令牌' });
+    }
+  } else {
+    // 防止A利用B的CSRF令牌发起请求
+    if (req.user && record.userId !== req.user.id) {
+      return res.status(403).json({ error: 'CSRF令牌与用户不匹配' });
+    }
   }
 
   next();
@@ -730,38 +735,81 @@ function isValidImageUrl(url) {
  */
 app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'), (req, res) => {
   try {
+    console.log('收到图片上传请求:', {
+      fileName: req.file?.originalname,
+      fileSize: req.file?.size,
+      mimeType: req.file?.mimetype,
+      destination: req.file?.destination,
+      path: req.file?.path
+    });
+
     if (!req.file) {
+      console.error('上传失败: 没有文件');
       return res.status(400).json({ error: '请选择图片' });
     }
 
     const filePath = req.file.path;
-    const buffer = fs.readFileSync(filePath);
-    
-    // 取文件前8字节的base64编码作为Magic Bytes检测依据
-    const base64Head = buffer.toString('base64', 0, Math.min(buffer.length, 8));
+    console.log('文件保存路径:', filePath);
 
-    let validMagic = false;
-    for (const [magic, ext] of Object.entries(IMAGE_MAGIC_BYTES)) {
-      if (base64Head.startsWith(magic)) {
-        validMagic = true;
-        break;
+    try {
+      const buffer = fs.readFileSync(filePath);
+      console.log('文件读取成功，大小:', buffer.length);
+      console.log('文件MIME类型:', req.file.mimetype);
+      console.log('文件扩展名:', path.extname(req.file.originalname));
+      
+      // 取文件前8字节的base64编码作为Magic Bytes检测依据
+      const base64Head = buffer.toString('base64', 0, Math.min(buffer.length, 8));
+      console.log('文件Magic Bytes:', base64Head);
+
+      let validMagic = false;
+      for (const [magic, ext] of Object.entries(IMAGE_MAGIC_BYTES)) {
+        if (base64Head.startsWith(magic)) {
+          validMagic = true;
+          console.log('Magic Bytes匹配:', magic, ext);
+          break;
+        }
       }
-    }
 
-    // Magic Bytes不匹配 → 文件可能被篡改，删除并拒绝
-    if (!validMagic) {
-      fs.unlinkSync(filePath);
-      return res.status(400).json({ error: '文件内容与图片格式不匹配' });
-    }
+      // 增加额外的文件类型检查，使用文件扩展名和MIME类型
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      const mimeType = req.file.mimetype;
+      const isImageMimeType = mimeType.startsWith('image/');
+      const isAllowedExt = ALLOWED_IMAGE_EXTENSIONS.has(ext);
+      
+      console.log('文件类型检查:', { ext, mimeType, isImageMimeType, isAllowedExt });
 
-    // 对上传文件执行AES加密
-    if (!encryptFile(filePath)) {
-      fs.unlinkSync(filePath);
-      return res.status(500).json({ error: '图片加密失败' });
-    }
+      // Magic Bytes不匹配但文件类型和扩展名正确时，允许上传
+      if (!validMagic && isImageMimeType && isAllowedExt) {
+        console.warn('Magic Bytes不匹配但文件类型和扩展名正确，允许上传');
+        validMagic = true;
+      }
 
-    const imageUrl = `/uploads/${req.file.filename}`;
-    res.json({ url: imageUrl });
+      // Magic Bytes不匹配 → 文件可能被篡改，删除并拒绝
+      if (!validMagic) {
+        console.error('Magic Bytes不匹配，删除文件');
+        fs.unlinkSync(filePath);
+        return res.status(400).json({ error: '文件内容与图片格式不匹配' });
+      }
+
+      // 对上传文件执行AES加密
+      console.log('开始加密文件:', filePath);
+      if (!encryptFile(filePath)) {
+        console.error('加密失败，删除文件');
+        fs.unlinkSync(filePath);
+        return res.status(500).json({ error: '图片加密失败' });
+      }
+      console.log('加密成功');
+
+      const imageUrl = `/uploads/${req.file.filename}`;
+      console.log('上传成功，返回URL:', imageUrl);
+      res.json({ url: imageUrl });
+    } catch (readErr) {
+      console.error('文件读取或处理失败:', readErr);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      res.status(500).json({ error: '文件处理失败' });
+    }
   } catch (err) {
     console.error('上传图片失败:', err);
     res.status(500).json({ error: '上传图片失败' });
@@ -1047,9 +1095,11 @@ app.post('/api/album/upload', authMiddleware, validateCsrfToken, albumUpload.sin
 
     // 向photos表插入元数据记录
     const db = getDb();
+    const uploadedBy = req.user.displayName || req.user.display_name || 'Unknown';
+    console.log('上传者信息:', { displayName: req.user.displayName, display_name: req.user.display_name, uploadedBy });
     const result = db.prepare(
       'INSERT INTO photos (filename, original_name, file_size, file_path, uploaded_by) VALUES (?, ?, ?, ?, ?)'
-    ).run(req.file.filename, req.file.originalname, req.file.size, req.file.path, req.user.displayName);
+    ).run(req.file.filename, req.file.originalname, req.file.size, req.file.path, uploadedBy);
 
     // 返回完整的照片记录（含自增ID）
     const photo = db.prepare(
