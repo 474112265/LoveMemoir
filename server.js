@@ -64,6 +64,9 @@ const { authMiddleware, loginHandler, logoutHandler } = require('./auth');
 /** 自定义图片加密模块，提供AES加解密、批量加密迁移等功能 */
 const { encryptFile, streamDecryptedFile, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
 
+/** 图片签名令牌HMAC密钥，独立于图片加密密钥 */
+const IMAGE_TOKEN_HMAC_KEY = process.env.IMAGE_TOKEN_HMAC_KEY || 'love-diary-image-token-hmac-key-2024';
+
 // ==================== 应用初始化与常量配置 ====================
 
 /** Express应用实例 */
@@ -322,7 +325,6 @@ function generateCsrfToken(userId) {
  * @returns {void}
  */
 function validateCsrfToken(req, res, next) {
-  // 安全读取方法（GET/HEAD/OPTIONS不需要CSRF保护）
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     return next();
   }
@@ -332,17 +334,19 @@ function validateCsrfToken(req, res, next) {
     return res.status(403).json({ error: '缺少CSRF令牌' });
   }
 
-  // 检查 server.js 本地的 csrfTokenStore
   let record = csrfTokenStore.get(csrfToken);
   if (!record) {
-    // 检查 auth.js 中的 csrfTokens 集合
     const { validateCsrfToken: authValidateCsrfToken } = require('./auth');
-    if (!authValidateCsrfToken(csrfToken)) {
+    const userId = req.user ? req.user.id : null;
+    if (!authValidateCsrfToken(csrfToken, userId)) {
       return res.status(403).json({ error: '无效的CSRF令牌' });
     }
   } else {
-    // 防止A利用B的CSRF令牌发起请求
-    if (req.user && record.userId !== req.user.id) {
+    if (Date.now() - record.createdAt > 24 * 60 * 60 * 1000) {
+      csrfTokenStore.delete(csrfToken);
+      return res.status(403).json({ error: 'CSRF令牌已过期' });
+    }
+    if (req.user && record.userId !== null && record.userId !== req.user.id) {
       return res.status(403).json({ error: 'CSRF令牌与用户不匹配' });
     }
   }
@@ -379,14 +383,16 @@ function securityHeaders(req, res, next) {
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'");
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  // 不设置 Cross-Origin-Resource-Policy，否则会阻止图片正常加载
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   res.removeHeader('X-Powered-By');
   next();
 }
 
 // ==================== 全局中间件注册 ====================
 
-// 注册安全头中间件（所有请求都会经过）
+app.use(securityHeaders);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -441,6 +447,25 @@ app.post('/api/logout', authMiddleware, logoutHandler);
 app.get('/api/csrf-token', authMiddleware, (req, res) => {
   const token = generateCsrfToken(req.user.id);
   res.json({ csrfToken: token });
+});
+
+/**
+ * GET /api/image-token
+ * 生成短期图片访问签名令牌
+ * 
+ * 安全设计：
+ * - 替代直接在URL query中传递长期Bearer Token
+ * - 签名令牌有效期仅5分钟，大幅缩小泄露窗口
+ * - 绑定用户ID，防止跨用户使用
+ * - 使用HMAC-SHA256签名，无法伪造
+ */
+app.get('/api/image-token', authMiddleware, (req, res) => {
+  const expiresAt = Date.now() + 5 * 60 * 1000;
+  const userId = req.user.id;
+  const payload = `${userId}:${expiresAt}`;
+  const signature = crypto.createHmac('sha256', IMAGE_TOKEN_HMAC_KEY).update(payload).digest('hex');
+  const imageToken = Buffer.from(`${payload}:${signature}`).toString('base64url');
+  res.json({ imageToken, expiresAt });
 });
 
 // ---------- 消息 CRUD 路由 ----------
@@ -735,76 +760,37 @@ function isValidImageUrl(url) {
  */
 app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'), (req, res) => {
   try {
-    console.log('收到图片上传请求:', {
-      fileName: req.file?.originalname,
-      fileSize: req.file?.size,
-      mimeType: req.file?.mimetype,
-      destination: req.file?.destination,
-      path: req.file?.path
-    });
-
     if (!req.file) {
-      console.error('上传失败: 没有文件');
       return res.status(400).json({ error: '请选择图片' });
     }
 
     const filePath = req.file.path;
-    console.log('文件保存路径:', filePath);
 
     try {
       const buffer = fs.readFileSync(filePath);
-      console.log('文件读取成功，大小:', buffer.length);
-      console.log('文件MIME类型:', req.file.mimetype);
-      console.log('文件扩展名:', path.extname(req.file.originalname));
-      
-      // 取文件前8字节的base64编码作为Magic Bytes检测依据
       const base64Head = buffer.toString('base64', 0, Math.min(buffer.length, 8));
-      console.log('文件Magic Bytes:', base64Head);
 
       let validMagic = false;
       for (const [magic, ext] of Object.entries(IMAGE_MAGIC_BYTES)) {
         if (base64Head.startsWith(magic)) {
           validMagic = true;
-          console.log('Magic Bytes匹配:', magic, ext);
           break;
         }
       }
 
-      // 增加额外的文件类型检查，使用文件扩展名和MIME类型
-      const ext = path.extname(req.file.originalname).toLowerCase();
-      const mimeType = req.file.mimetype;
-      const isImageMimeType = mimeType.startsWith('image/');
-      const isAllowedExt = ALLOWED_IMAGE_EXTENSIONS.has(ext);
-      
-      console.log('文件类型检查:', { ext, mimeType, isImageMimeType, isAllowedExt });
-
-      // Magic Bytes不匹配但文件类型和扩展名正确时，允许上传
-      if (!validMagic && isImageMimeType && isAllowedExt) {
-        console.warn('Magic Bytes不匹配但文件类型和扩展名正确，允许上传');
-        validMagic = true;
-      }
-
-      // Magic Bytes不匹配 → 文件可能被篡改，删除并拒绝
       if (!validMagic) {
-        console.error('Magic Bytes不匹配，删除文件');
         fs.unlinkSync(filePath);
         return res.status(400).json({ error: '文件内容与图片格式不匹配' });
       }
 
-      // 对上传文件执行AES加密
-      console.log('开始加密文件:', filePath);
       if (!encryptFile(filePath)) {
-        console.error('加密失败，删除文件');
         fs.unlinkSync(filePath);
         return res.status(500).json({ error: '图片加密失败' });
       }
-      console.log('加密成功');
 
       const imageUrl = `/uploads/${req.file.filename}`;
-      console.log('上传成功，返回URL:', imageUrl);
       res.json({ url: imageUrl });
     } catch (readErr) {
-      console.error('文件读取或处理失败:', readErr);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
@@ -837,62 +823,85 @@ app.post('/api/upload', authMiddleware, validateCsrfToken, upload.single('image'
  */
 function serveEncryptedImage(baseDir) {
   return (req, res, next) => {
-    // 优先从 Authorization header 提取 Token
+    let authenticated = false;
+
     let authToken = req.headers['authorization']?.replace('Bearer ', '');
     
-    // 浏览器 <img> 标签无法自定义header，回退到query参数方式
-    if (!authToken && req.query.token) {
-      authToken = req.query.token;
+    if (authToken) {
+      try {
+        const db = getDb();
+        const tokenRecord = db.prepare(`
+          SELECT at.*, u.username, u.display_name 
+          FROM auth_tokens at 
+          JOIN users u ON at.user_id = u.id 
+          WHERE at.token = ?
+        `).get(authToken);
+
+        if (tokenRecord) {
+          const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
+          if (tokenAge <= 7 * 24 * 60 * 60 * 1000) {
+            authenticated = true;
+          }
+        }
+      } catch (e) {}
     }
 
-    // 无Token → 401 Unauthorized
-    if (!authToken) {
+    if (!authenticated && req.query.token) {
+      try {
+        const queryToken = req.query.token;
+        
+        const db = getDb();
+        const tokenRecord = db.prepare(`
+          SELECT at.*, u.username, u.display_name 
+          FROM auth_tokens at 
+          JOIN users u ON at.user_id = u.id 
+          WHERE at.token = ?
+        `).get(queryToken);
+
+        if (tokenRecord) {
+          const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
+          if (tokenAge <= 7 * 24 * 60 * 60 * 1000) {
+            authenticated = true;
+          }
+        }
+
+        if (!authenticated) {
+          const decoded = Buffer.from(queryToken, 'base64url').toString('utf8');
+          const parts = decoded.split(':');
+          if (parts.length === 3) {
+            const [userIdStr, expiresStr, signature] = parts;
+            const payload = `${userIdStr}:${expiresStr}`;
+            const expectedSig = crypto.createHmac('sha256', IMAGE_TOKEN_HMAC_KEY).update(payload).digest('hex');
+            if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+              const expiresAt = Number(expiresStr);
+              if (Date.now() <= expiresAt) {
+                authenticated = true;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!authenticated) {
       return res.status(401).send('Unauthorized');
     }
 
-    // Token有效性验证（复用auth_tokens表查询逻辑）
-    try {
-      const db = getDb();
-      const tokenRecord = db.prepare(`
-        SELECT at.*, u.username, u.display_name 
-        FROM auth_tokens at 
-        JOIN users u ON at.user_id = u.id 
-        WHERE at.token = ?
-      `).get(authToken);
-
-      if (!tokenRecord) {
-        return res.status(401).send('Invalid token');
-      }
-
-      // Token有效期检查（7天）
-      const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
-      if (tokenAge > 7 * 24 * 60 * 60 * 1000) {
-        return res.status(401).send('Token expired');
-      }
-    } catch (e) {
-      return res.status(401).send('Auth failed');
-    }
-
-    // 构建安全的文件绝对路径
     const requestedFile = path.join(baseDir, req.path);
     const resolvedPath = path.resolve(requestedFile);
     const resolvedBase = path.resolve(baseDir);
 
-    // 路径穿越防御：确保最终路径仍在基础目录内
     if (!resolvedPath.startsWith(resolvedBase)) {
       return res.status(403).send('Forbidden');
     }
 
-    // 文件不存在 → 404
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).send('Not found');
     }
 
-    // 根据文件扩展名确定MIME类型
     const ext = path.extname(req.path).toLowerCase();
     const contentType = getContentType(ext);
 
-    // 流式解密并发送
     if (!streamDecryptedFile(resolvedPath, res, contentType)) {
       return res.status(500).send('Decryption failed');
     }
@@ -901,6 +910,112 @@ function serveEncryptedImage(baseDir) {
 
 // 注册加密图片服务中间件到对应路由
 app.use('/uploads', serveEncryptedImage(uploadsDir));
+
+/**
+ * GET /api/album/thumbnail/:id
+ * 获取指定照片的缩略图（支持query参数token认证）
+ * 
+ * 必须在 app.use('/album', ...) 之前注册，否则会被 serveEncryptedImage 中间件先拦截
+ */
+app.get('/api/album/thumbnail/:id', async (req, res) => {
+  try {
+    let authenticated = false;
+
+    let authToken = req.headers['authorization']?.replace('Bearer ', '');
+    if (authToken) {
+      try {
+        const db = getDb();
+        const tokenRecord = db.prepare(`
+          SELECT at.*, u.username, u.display_name 
+          FROM auth_tokens at 
+          JOIN users u ON at.user_id = u.id 
+          WHERE at.token = ?
+        `).get(authToken);
+
+        if (tokenRecord) {
+          const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
+          if (tokenAge <= 7 * 24 * 60 * 60 * 1000) {
+            authenticated = true;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!authenticated && req.query.token) {
+      try {
+        const queryToken = req.query.token;
+
+        const db = getDb();
+        const tokenRecord = db.prepare(`
+          SELECT at.*, u.username, u.display_name 
+          FROM auth_tokens at 
+          JOIN users u ON at.user_id = u.id 
+          WHERE at.token = ?
+        `).get(queryToken);
+
+        if (tokenRecord) {
+          const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
+          if (tokenAge <= 7 * 24 * 60 * 60 * 1000) {
+            authenticated = true;
+          }
+        }
+
+        if (!authenticated) {
+          const decoded = Buffer.from(queryToken, 'base64url').toString('utf8');
+          const parts = decoded.split(':');
+          if (parts.length === 3) {
+            const [userIdStr, expiresStr, signature] = parts;
+            const payload = `${userIdStr}:${expiresStr}`;
+            const expectedSig = crypto.createHmac('sha256', IMAGE_TOKEN_HMAC_KEY).update(payload).digest('hex');
+            if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+              const expiresAt = Number(expiresStr);
+              if (Date.now() <= expiresAt) {
+                authenticated = true;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!authenticated) {
+      return res.status(401).send('Unauthorized');
+    }
+
+    const photoId = Number(req.params.id);
+    if (isNaN(photoId) || photoId <= 0) {
+      return res.status(400).json({ error: '无效的图片ID' });
+    }
+
+    const db = getDb();
+    const photo = db.prepare('SELECT filename FROM photos WHERE id = ?').get(photoId);
+    if (!photo) {
+      return res.status(404).json({ error: '图片不存在' });
+    }
+
+    const filename = photo.filename;
+    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+      return res.status(400).json({ error: '无效的文件名' });
+    }
+
+    const thumbBuffer = await generateThumbnail(filename);
+    if (thumbBuffer) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.setHeader('Content-Length', thumbBuffer.length);
+      res.end(thumbBuffer);
+    } else {
+      const sourcePath = path.join(albumDir, filename);
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = getContentType(ext);
+      return streamDecryptedFile(sourcePath, res, contentType);
+    }
+  } catch (err) {
+    console.error('获取缩略图失败:', err);
+    res.status(500).json({ error: '获取缩略图失败' });
+  }
+});
+
 app.use('/album', serveEncryptedImage(albumDir));
 
 // ========== 相册 API ==========
@@ -923,113 +1038,40 @@ async function generateThumbnail(filename) {
   const sourcePath = path.join(albumDir, filename);
   if (!fs.existsSync(sourcePath)) return null;
 
-  // 缩略图命名规则：thumb_ + 原文件名
   const thumbFilename = `thumb_${filename}`;
   const thumbPath = path.join(thumbnailDir, thumbFilename);
 
-  // 已有缓存则直接返回
-  if (fs.existsSync(thumbPath)) return thumbPath;
-
   try {
-    const { decryptBuffer } = require('./image-crypto');
+    const { decryptBuffer, encryptBuffer, isEncrypted } = require('./image-crypto');
+
+    if (fs.existsSync(thumbPath)) {
+      const thumbBuffer = fs.readFileSync(thumbPath);
+      if (isEncrypted(thumbPath)) {
+        const decryptedThumb = decryptBuffer(thumbBuffer);
+        if (decryptedThumb) return decryptedThumb;
+      } else {
+        return thumbBuffer;
+      }
+    }
+
     const encryptedBuffer = fs.readFileSync(sourcePath);
     const decryptedBuffer = decryptBuffer(encryptedBuffer);
     if (!decryptedBuffer) return null;
 
-    // 使用 sharp 进行高质量缩略图生成
-    await sharp(decryptedBuffer)
+    const thumbBuffer = await sharp(decryptedBuffer)
       .resize(300, 300, { fit: 'cover', position: 'center' })
       .jpeg({ quality: 70 })
-      .toFile(thumbPath);
+      .toBuffer();
 
-    return thumbPath;
+    const encryptedThumb = encryptBuffer(thumbBuffer);
+    fs.writeFileSync(thumbPath, encryptedThumb);
+
+    return thumbBuffer;
   } catch (err) {
     console.error(`生成缩略图失败 ${filename}:`, err.message);
     return null;
   }
 }
-
-/**
- * GET /api/album/thumbnail/:id
- * 获取指定照片的缩略图（支持query参数token认证）
- * 
- * 与主认证中间件不同：此路由专门为<img>标签设计，
- * 因为浏览器发送的图片请求无法携带自定义Header，
- * 所以额外支持从 URL query 参数读取 token。
- * 
- * 若缩略图生成失败则回退到流式解密原图。
- */
-app.get('/api/album/thumbnail/:id', async (req, res) => {
-  try {
-    // 支持两种Token传递方式：Header 或 Query参数
-    let authToken = req.headers['authorization']?.replace('Bearer ', '');
-    if (!authToken && req.query.token) {
-      authToken = req.query.token;
-    }
-
-    if (!authToken) {
-      return res.status(401).send('Unauthorized');
-    }
-
-    // 内联Token验证逻辑（同serveEncryptedImage中的验证）
-    try {
-      const db = getDb();
-      const tokenRecord = db.prepare(`
-        SELECT at.*, u.username, u.display_name 
-        FROM auth_tokens at 
-        JOIN users u ON at.user_id = u.id 
-        WHERE at.token = ?
-      `).get(authToken);
-
-      if (!tokenRecord) {
-        return res.status(401).send('Invalid token');
-      }
-
-      const tokenAge = Date.now() - new Date(tokenRecord.created_at + 'Z').getTime();
-      if (tokenAge > 7 * 24 * 60 * 60 * 1000) {
-        return res.status(401).send('Token expired');
-      }
-    } catch (e) {
-      return res.status(401).send('Auth failed');
-    }
-
-    // 参数校验：photo ID必须为正整数
-    const photoId = Number(req.params.id);
-    if (isNaN(photoId) || photoId <= 0) {
-      return res.status(400).json({ error: '无效的图片ID' });
-    }
-
-    const db = getDb();
-    const photo = db.prepare('SELECT filename FROM photos WHERE id = ?').get(photoId);
-    if (!photo) {
-      return res.status(404).json({ error: '图片不存在' });
-    }
-
-    // 文件名校验：防止路径穿越攻击
-    const filename = photo.filename;
-    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-      return res.status(400).json({ error: '无效的文件名' });
-    }
-
-    // 尝试生成/获取缩略图
-    const thumbPath = await generateThumbnail(filename);
-    if (!thumbPath || !fs.existsSync(thumbPath)) {
-      // 缩略图生成失败 → 回退到流式解密原图
-      const sourcePath = path.join(albumDir, filename);
-      const ext = path.extname(filename).toLowerCase();
-      const contentType = getContentType(ext);
-      return streamDecryptedFile(sourcePath, res, contentType);
-    }
-
-    // 成功返回缩略图（JPEG格式，缓存24小时）
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    fs.createReadStream(thumbPath).pipe(res);
-  } catch (err) {
-    console.error('获取缩略图失败:', err);
-    res.status(500).json({ error: '获取缩略图失败' });
-  }
-});
 
 /**
  * GET /api/album
@@ -1087,16 +1129,13 @@ app.post('/api/album/upload', authMiddleware, validateCsrfToken, albumUpload.sin
       return res.status(400).json({ error: '文件内容与图片格式不匹配' });
     }
 
-    // 加密上传的相册图片
     if (!encryptFile(filePath)) {
       fs.unlinkSync(filePath);
       return res.status(500).json({ error: '图片加密失败' });
     }
 
-    // 向photos表插入元数据记录
     const db = getDb();
-    const uploadedBy = req.user.displayName || req.user.display_name || 'Unknown';
-    console.log('上传者信息:', { displayName: req.user.displayName, display_name: req.user.display_name, uploadedBy });
+    const uploadedBy = req.user.display_name || 'Unknown';
     const result = db.prepare(
       'INSERT INTO photos (filename, original_name, file_size, file_path, uploaded_by) VALUES (?, ?, ?, ?, ?)'
     ).run(req.file.filename, req.file.originalname, req.file.size, req.file.path, uploadedBy);

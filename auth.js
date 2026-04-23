@@ -81,56 +81,71 @@ function resetLoginAttempts(ip) {
 // ==================== CSRF 令牌管理 ====================
 
 /**
- * 内存存储的CSRF令牌集合
+ * 内存存储的CSRF令牌映射表
+ * 结构: Map<token_string, { userId: number|null, createdAt: number }>
  * 生产环境建议使用Redis等外部存储以支持多进程部署
- * @type {Set<string>}
+ * @type {Map<string, {userId: number|null, createdAt: number}>}
  */
-const csrfTokens = new Set();
+const csrfTokenStore = new Map();
 
-/** CSRF令牌有效期（毫秒），默认2小时 */
-const CSRF_TOKEN_TTL = 2 * 60 * 60 * 1000;
+/** CSRF令牌有效期（毫秒），默认24小时 */
+const CSRF_TOKEN_TTL = 24 * 60 * 60 * 1000;
 
 /** 定时清理间隔（毫秒），每小时清理一次过期令牌 */
 const CSRF_CLEANUP_INTERVAL = 60 * 60 * 1000;
 
 /**
- * 生成一个新的CSRF令牌并存入内存集合
+ * 生成一个新的CSRF令牌并存入内存映射表
  * 
+ * @param {number|null} userId - 关联的用户ID，登录时可为null
  * @returns {string} 生成的CSRF令牌字符串（32字节随机hex）
  */
-function generateCsrfToken() {
+function generateCsrfToken(userId = null) {
   const token = crypto.randomBytes(32).toString('hex');
-  csrfTokens.add(token);
+  csrfTokenStore.set(token, { userId, createdAt: Date.now() });
   return token;
 }
 
 /**
- * 验证提交的CSRF令牌是否有效且未被使用过
+ * 验证提交的CSRF令牌是否有效
  * 
- * 使用"一次性令牌"策略：验证通过后立即从集合中移除，
- * 确保每个CSRF令牌只能被消费一次。
+ * 使用"持久令牌"策略：令牌在有效期内可多次使用，
+ * 前端CSRF重试机制不会因令牌被消耗而失败。
+ * 同时校验令牌关联的用户ID与当前用户一致（防跨用户伪造）。
  * 
  * @param {string} token - 从请求头x-csrf-token中提取的待验证令牌
- * @returns {boolean} true表示令牌有效且已被消耗；false表示无效或不存在
+ * @param {number|null} userId - 当前请求的用户ID，用于跨用户校验
+ * @returns {boolean} true表示令牌有效；false表示无效或已过期
  */
-function validateCsrfToken(token) {
-  if (!token || !csrfTokens.has(token)) return false;
-  csrfTokens.delete(token);
+function validateCsrfToken(token, userId = null) {
+  if (!token) return false;
+  const record = csrfTokenStore.get(token);
+  if (!record) return false;
+  if (Date.now() - record.createdAt > CSRF_TOKEN_TTL) {
+    csrfTokenStore.delete(token);
+    return false;
+  }
+  if (userId !== null && record.userId !== null && record.userId !== userId) {
+    return false;
+  }
   return true;
 }
 
 /**
  * 定期清理过期的CSRF令牌
  * 通过setInterval每CSRF_CLEANUP_INTERVAL毫秒执行一次清理操作，
- * 移除创建时间超过TTL的令牌（当前实现中未记录创建时间，
- * 此函数作为预留接口供后续扩展）
+ * 移除创建时间超过TTL的令牌
  * 
  * @returns {void}
  */
 function startCsrfCleanup() {
   setInterval(() => {
-    // 当前简单实现：如果需要精确过期控制，需改用Map存储带时间戳的令牌
-    // 这里保留清理逻辑框架以便未来扩展
+    const now = Date.now();
+    for (const [key, val] of csrfTokenStore) {
+      if (now - val.createdAt > CSRF_TOKEN_TTL) {
+        csrfTokenStore.delete(key);
+      }
+    }
   }, CSRF_CLEANUP_INTERVAL);
 }
 
@@ -321,7 +336,7 @@ async function loginHandler(req, res) {
 
     // 登录成功：创建认证token和CSRF token
     const token = createAuthToken(user.id);
-    const csrfToken = generateCsrfToken();
+    const csrfToken = generateCsrfToken(user.id);
 
     // 清除该IP的登录尝试记录
     resetLoginAttempts(clientIp);

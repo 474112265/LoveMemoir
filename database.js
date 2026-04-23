@@ -22,6 +22,9 @@ const Database = require('better-sqlite3');
 /** Node.js 路径处理模块，用于构建数据库文件路径 */
 const path = require('path');
 
+/** Node.js 内置加密模块，用于生成随机密码 */
+const crypto = require('crypto');
+
 /** 密码哈希函数引用 */
 const { hashPassword } = require('./crypto-utils');
 
@@ -161,9 +164,9 @@ function initTables() {
       'UPDATE users SET password = ? WHERE id = ?'
     );
     users.forEach(user => {
-      // 密码不含":"分隔符说明是旧版明文格式，需要重新哈希
       if (!user.password.includes(':')) {
-        updateUserPassword.run(hashPassword('love0815'), user.id);
+        console.warn(`⚠️ 用户ID ${user.id} 的密码为旧版明文格式，无法自动迁移，请手动重置密码`);
+        updateUserPassword.run(hashPassword(crypto.randomBytes(32).toString('hex')), user.id);
       }
     });
   }

@@ -36,8 +36,20 @@ const path = require('path');
  * 默认密钥仅用于开发/测试环境。
  * 部署到生产服务器时必须设置 IMAGE_ENCRYPTION_KEY 环境变量，
  * 使用强随机密码（至少32字符）替换默认值。
+ * 若 NODE_ENV=production 且未设置环境变量，服务将拒绝启动。
  */
-const ENCRYPTION_KEY = process.env.IMAGE_ENCRYPTION_KEY || 'love-diary-2024-aes256-secret-key';
+const DEFAULT_KEY = 'love-diary-2024-aes256-secret-key';
+const ENCRYPTION_KEY = process.env.IMAGE_ENCRYPTION_KEY || DEFAULT_KEY;
+
+if (process.env.NODE_ENV === 'production' && !process.env.IMAGE_ENCRYPTION_KEY) {
+  console.error('❌ 安全错误: 生产环境必须设置 IMAGE_ENCRYPTION_KEY 环境变量！');
+  console.error('   请执行: export IMAGE_ENCRYPTION_KEY=<你的强随机密钥>');
+  process.exit(1);
+}
+
+if (!process.env.IMAGE_ENCRYPTION_KEY) {
+  console.warn('⚠️ 警告: 使用默认加密密钥，仅限开发环境！生产环境请设置 IMAGE_ENCRYPTION_KEY 环境变量');
+}
 
 /** AES对称加密算法选择：CBC模式（需要IV） */
 const ALGORITHM = 'aes-256-cbc';

@@ -66,6 +66,12 @@
   /** 标志位：当前滚动位置是否在聊天区域底部（容差80px内） */
   let isAtBottom = true;
 
+  /** 短期图片访问签名令牌，有效期5分钟 */
+  let imageToken = '';
+
+  /** 图片签名令牌过期时间戳 */
+  let imageTokenExpiresAt = 0;
+
   // ==================== 工具函数 ====================
 
   /**
@@ -78,10 +84,30 @@
    * @param {string} url - 原始图片URL路径
    * @returns {string} 追加了token参数后的完整URL；若url或authToken为空则原样返回
    */
+  async function fetchImageToken() {
+    if (imageToken && Date.now() < imageTokenExpiresAt - 60000) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/image-token`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        imageToken = data.imageToken;
+        imageTokenExpiresAt = data.expiresAt;
+      }
+    } catch (e) {}
+  }
+
   function authImageUrl(url) {
-    if (!url || !authToken) return url;
+    if (!url) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return url + sep + 'token=' + encodeURIComponent(authToken);
+    if (imageToken) {
+      return url + sep + 'token=' + encodeURIComponent(imageToken);
+    }
+    if (authToken) {
+      return url + sep + 'token=' + encodeURIComponent(authToken);
+    }
+    return url;
   }
 
   /**
@@ -851,6 +877,7 @@
       }
     }
     fetchCsrfToken();
+    fetchImageToken();
     fetchUnreadCount();
   }
 
@@ -876,6 +903,7 @@
     indicator.style.display = 'flex';
 
     try {
+      await fetchImageToken();
       const res = await safeFetch(`${API_BASE}/api/messages?limit=100`);
 
       if (res.status === 401) {
@@ -1862,6 +1890,7 @@
     grid.innerHTML = '<div class="album-empty"><div class="album-empty-emoji"><div class="loading-spinner" style="margin:0 auto;"></div></div><div class="album-empty-text">加载中...</div></div>';
 
     try {
+      await fetchImageToken();
       const res = await safeFetch(`${API_BASE}/api/album`);
       if (!res.ok) {
         showToast('获取相册失败', 'error');
