@@ -53,6 +53,11 @@
             <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
           </svg>
         </button>
+        <button id="emailSettingsBtn" class="email-settings-btn" title="邮箱设置">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+          </svg>
+        </button>
         <img id="headerAvatar" class="header-avatar" src="/images/xiaoyang-avatar.png" alt="">
         <span id="currentUser" class="current-user"></span>
         <button id="logoutBtn" class="logout-btn" title="退出登录">🚪</button>
@@ -238,6 +243,39 @@
   </div>
 
   <div id="toast" class="toast" style="display:none;"></div>
+
+  <div id="emailSettingsModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card email-settings-card">
+      <div class="modal-header">
+        <h3>📧 邮箱设置</h3>
+        <button id="closeEmailSettings" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="email-settings-desc">
+          <p>设置邮箱后，当收到新消息超过3分钟未回复时，系统将自动发送邮件提醒。</p>
+        </div>
+        <div class="email-input-group">
+          <label for="emailInput" class="email-label">邮箱地址</label>
+          <div class="email-input-row">
+            <input type="email" id="emailInput" class="email-input" placeholder="请输入邮箱地址，如 example@qq.com" autocomplete="email">
+            <button id="clearEmailBtn" class="email-clear-btn" title="清除邮箱" style="display:none;">✕</button>
+          </div>
+          <div id="emailError" class="email-error" style="display:none;"></div>
+          <div id="emailStatus" class="email-status" style="display:none;"></div>
+        </div>
+        <div class="email-reminder-info">
+          <div class="email-reminder-icon">💡</div>
+          <div class="email-reminder-text">
+            <p>提醒内容：<strong>同一邮箱10分钟内最多收到一封提醒邮件</strong></p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="testEmailBtn" class="modal-btn modal-btn-secondary" disabled>发送测试邮件</button>
+        <button id="saveEmailBtn" class="modal-btn modal-btn-primary">保存设置</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/js/app.js?v=20260423"></script>
 </body>

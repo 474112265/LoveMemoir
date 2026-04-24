@@ -64,6 +64,9 @@ const { authMiddleware, loginHandler, logoutHandler } = require('./auth');
 /** 自定义图片加密模块，提供AES加解密、批量加密迁移等功能 */
 const { encryptFile, streamDecryptedFile, streamDecryptedFileWithRange, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
 
+/** 自定义邮件工具模块，提供邮箱设置、邮件发送、提醒调度等功能 */
+const { saveUserEmail, getUserEmail, sendReminderEmail, startReminderScheduler, getEmailLogs, isValidEmail } = require('./email-utils');
+
 /** FFmpeg视频处理封装库，用于视频缩略图截取 */
 const ffmpeg = require('fluent-ffmpeg');
 
@@ -1442,9 +1445,81 @@ app.put('/api/album/reorder', authMiddleware, validateCsrfToken, (req, res) => {
   }
 });
 
+// ==================== 邮箱设置 API ====================
+
+/**
+ * GET /api/email
+ * 获取当前用户的邮箱设置
+ */
+app.get('/api/email', authMiddleware, (req, res) => {
+  try {
+    const email = getUserEmail(req.user.user_id);
+    res.json({ email: email || '' });
+  } catch (err) {
+    console.error('获取邮箱设置失败:', err);
+    res.status(500).json({ error: '获取邮箱设置失败' });
+  }
+});
+
+/**
+ * POST /api/email
+ * 保存当前用户的邮箱设置
+ * 
+ * 请求体：{ email: string }
+ */
+app.post('/api/email', authMiddleware, validateCsrfToken, async (req, res) => {
+  try {
+    const { email } = req.body;
+    const result = await saveUserEmail(req.user.user_id, email || '');
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ success: true, email: result.email });
+  } catch (err) {
+    console.error('保存邮箱设置失败:', err);
+    res.status(500).json({ error: '保存邮箱设置失败' });
+  }
+});
+
+/**
+ * POST /api/email/test
+ * 发送测试邮件到当前用户设置的邮箱
+ */
+app.post('/api/email/test', authMiddleware, validateCsrfToken, async (req, res) => {
+  try {
+    const email = getUserEmail(req.user.user_id);
+    if (!email) {
+      return res.status(400).json({ error: '请先设置邮箱地址' });
+    }
+    const result = await sendReminderEmail(email, req.user.display_name);
+    if (result.success) {
+      res.json({ success: true, message: result.skipped ? '邮件冷却中，请稍后再试' : '测试邮件已发送' });
+    } else {
+      res.status(500).json({ error: '邮件发送失败: ' + result.error });
+    }
+  } catch (err) {
+    console.error('发送测试邮件失败:', err);
+    res.status(500).json({ error: '发送测试邮件失败' });
+  }
+});
+
+/**
+ * GET /api/email/logs
+ * 获取邮件发送日志
+ */
+app.get('/api/email/logs', authMiddleware, (req, res) => {
+  try {
+    const logs = getEmailLogs(50);
+    res.json(logs);
+  } catch (err) {
+    console.error('获取邮件日志失败:', err);
+    res.status(500).json({ error: '获取邮件日志失败' });
+  }
+});
+
 /**
  * PUT /api/messages/:id
- * 编辑已有消息的内容
+ * 编辑消息内容
  * 
  * 仅更新content字段和updated_at时间戳。
  * 不允许修改发送者身份或消息类型。
@@ -1573,5 +1648,8 @@ app.listen(PORT, () => {
   } catch (e) {
     console.error('图片加密迁移失败:', e);
   }
+
+  startReminderScheduler();
+
   console.log(`💕 恋爱记事簿服务已启动: http://localhost:${PORT}`);
 });

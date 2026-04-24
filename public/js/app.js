@@ -695,6 +695,7 @@
         closeImagePreview();
         closeAlbumModal();
         closeAlbumDeleteModal();
+        closeEmailSettings();
         $('#albumViewOverlay').style.display = 'none';
         $('#albumViewImg').src = '';
         $('#albumViewLoading').style.display = 'none';
@@ -2212,6 +2213,16 @@
    */
   function initAlbum() {
     $('#albumBtn').addEventListener('click', openAlbumModal);
+
+    $('#emailSettingsBtn').addEventListener('click', openEmailSettings);
+    $('#closeEmailSettings').addEventListener('click', closeEmailSettings);
+    $('#emailSettingsModal').addEventListener('click', (e) => {
+      if (e.target === $('#emailSettingsModal')) closeEmailSettings();
+    });
+    $('#emailInput').addEventListener('input', handleEmailInput);
+    $('#clearEmailBtn').addEventListener('click', clearEmailInput);
+    $('#saveEmailBtn').addEventListener('click', saveEmailSettings);
+    $('#testEmailBtn').addEventListener('click', sendTestEmail);
     $('#closeAlbumModal').addEventListener('click', closeAlbumModal);
     $('#albumImageInput').addEventListener('change', handleAlbumUpload);
     $('#albumModal').addEventListener('click', (e) => {
@@ -2236,6 +2247,176 @@
         if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
       }
     });
+  }
+
+  // ==================== 邮箱设置 ====================
+
+  async function openEmailSettings() {
+    $('#emailSettingsModal').style.display = 'flex';
+    const emailInput = $('#emailInput');
+    const emailError = $('#emailError');
+    const emailStatus = $('#emailStatus');
+    const clearBtn = $('#clearEmailBtn');
+    const testBtn = $('#testEmailBtn');
+
+    emailInput.value = '';
+    emailInput.classList.remove('email-input-error', 'email-input-success');
+    emailError.style.display = 'none';
+    emailStatus.style.display = 'none';
+    clearBtn.style.display = 'none';
+    testBtn.disabled = true;
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/email`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.email) {
+          emailInput.value = data.email;
+          clearBtn.style.display = 'flex';
+          testBtn.disabled = false;
+          emailInput.classList.add('email-input-success');
+        }
+      }
+    } catch (err) {
+      console.error('获取邮箱设置失败:', err);
+    }
+  }
+
+  function closeEmailSettings() {
+    $('#emailSettingsModal').style.display = 'none';
+  }
+
+  function handleEmailInput() {
+    const emailInput = $('#emailInput');
+    const clearBtn = $('#clearEmailBtn');
+    const emailError = $('#emailError');
+    const emailStatus = $('#emailStatus');
+    const testBtn = $('#testEmailBtn');
+    const value = emailInput.value.trim();
+
+    emailInput.classList.remove('email-input-error', 'email-input-success');
+    emailError.style.display = 'none';
+    emailStatus.style.display = 'none';
+
+    clearBtn.style.display = value ? 'flex' : 'none';
+
+    if (value) {
+      const isValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+      if (isValid) {
+        testBtn.disabled = false;
+      } else {
+        testBtn.disabled = true;
+      }
+    } else {
+      testBtn.disabled = true;
+    }
+  }
+
+  function clearEmailInput() {
+    const emailInput = $('#emailInput');
+    emailInput.value = '';
+    emailInput.classList.remove('email-input-error', 'email-input-success');
+    $('#emailError').style.display = 'none';
+    $('#emailStatus').style.display = 'none';
+    $('#clearEmailBtn').style.display = 'none';
+    $('#testEmailBtn').disabled = true;
+    emailInput.focus();
+  }
+
+  async function saveEmailSettings() {
+    const emailInput = $('#emailInput');
+    const emailError = $('#emailError');
+    const emailStatus = $('#emailStatus');
+    const saveBtn = $('#saveEmailBtn');
+    const testBtn = $('#testEmailBtn');
+    const value = emailInput.value.trim();
+
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      emailInput.classList.add('email-input-error');
+      emailInput.classList.remove('email-input-success');
+      emailError.textContent = '请输入正确的邮箱格式，如 example@qq.com';
+      emailError.style.display = 'block';
+      emailStatus.style.display = 'none';
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中...';
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: value })
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        emailInput.classList.remove('email-input-error');
+        emailInput.classList.add('email-input-success');
+        emailError.style.display = 'none';
+        emailStatus.textContent = value ? '✅ 邮箱设置已保存' : '✅ 邮箱已清除';
+        emailStatus.style.display = 'block';
+        testBtn.disabled = !value;
+        $('#clearEmailBtn').style.display = value ? 'flex' : 'none';
+        showToast(value ? '邮箱设置已保存' : '邮箱已清除', 'success');
+      } else {
+        emailInput.classList.add('email-input-error');
+        emailInput.classList.remove('email-input-success');
+        emailError.textContent = data.error || '保存失败';
+        emailError.style.display = 'block';
+        emailStatus.style.display = 'none';
+      }
+    } catch (err) {
+      emailInput.classList.add('email-input-error');
+      emailInput.classList.remove('email-input-success');
+      emailError.textContent = '网络错误，请稍后重试';
+      emailError.style.display = 'block';
+      emailStatus.style.display = 'none';
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存设置';
+    }
+  }
+
+  async function sendTestEmail() {
+    const testBtn = $('#testEmailBtn');
+    const emailStatus = $('#emailStatus');
+
+    testBtn.disabled = true;
+    testBtn.textContent = '发送中...';
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/email/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        emailStatus.textContent = '✅ ' + (data.message || '测试邮件已发送');
+        emailStatus.style.display = 'block';
+        showToast(data.message || '测试邮件已发送', 'success');
+      } else {
+        emailStatus.textContent = '❌ ' + (data.error || '发送失败');
+        emailStatus.style.display = 'block';
+        emailStatus.style.color = '#ef4444';
+        showToast(data.error || '发送失败', 'error');
+      }
+    } catch (err) {
+      emailStatus.textContent = '❌ 网络错误，请稍后重试';
+      emailStatus.style.display = 'block';
+      emailStatus.style.color = '#ef4444';
+      showToast('网络错误', 'error');
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = '发送测试邮件';
+      setTimeout(() => {
+        emailStatus.style.color = '';
+      }, 3000);
+    }
   }
 
   /**

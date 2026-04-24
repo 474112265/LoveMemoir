@@ -152,6 +152,12 @@ function initTables() {
   try {
     db.exec(`ALTER TABLE photos ADD COLUMN sort_order INTEGER DEFAULT 0`);
   } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN email_encrypted TEXT DEFAULT NULL`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN email_iv TEXT DEFAULT NULL`);
+  } catch (e) {}
 
   // ==================== 种子数据初始化 ====================
   
