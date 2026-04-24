@@ -141,7 +141,16 @@ function initTables() {
     db.exec(`ALTER TABLE messages ADD COLUMN read_at DATETIME`);
   } catch (e) {}
   try {
+    db.exec(`ALTER TABLE messages ADD COLUMN reply_to_id INTEGER DEFAULT NULL`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN reply_preview TEXT DEFAULT NULL`);
+  } catch (e) {}
+  try {
     db.exec(`ALTER TABLE photos ADD COLUMN media_type TEXT DEFAULT 'image'`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE photos ADD COLUMN sort_order INTEGER DEFAULT 0`);
   } catch (e) {}
 
   // ==================== 种子数据初始化 ====================

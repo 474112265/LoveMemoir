@@ -48,6 +48,15 @@
   /** 当前正在删除的消息ID，null表示未处于删除确认状态 */
   let deletingMessageId = null;
 
+  /** 当前正在回复的消息对象，null表示未处于回复状态 */
+  let replyingToMessage = null;
+
+  /** 长按定时器ID，用于移动端长按触发上下文菜单 */
+  let longPressTimer = null;
+
+  /** 长按是否已触发的标志位 */
+  let longPressTriggered = false;
+
   /** 当前选中的发送者名称，默认为'小洋' */
   let selectedSender = '小洋';
 
@@ -588,7 +597,11 @@
         } else if (action === 'delete') {
           handleDeleteMessage(Number(actionEl.dataset.id));
         }
+        hideContextMenu();
+        return;
       }
+
+      hideContextMenu();
 
       // 点击表情面板外部区域时自动关闭面板
       const picker = $('#emojiPicker');
@@ -597,6 +610,79 @@
         !picker.contains(e.target) &&
         !emojiBtn.contains(e.target)) {
         picker.style.display = 'none';
+      }
+    });
+
+    // 消息区域右键菜单（桌面端）
+    document.addEventListener('contextmenu', (e) => {
+      const msgWrapper = e.target.closest('.message-wrapper');
+      if (msgWrapper) {
+        e.preventDefault();
+        const msgId = Number(msgWrapper.dataset.id);
+        showContextMenu(e.clientX, e.clientY, msgId);
+      }
+    });
+
+    // 消息区域长按菜单（移动端）
+    document.addEventListener('touchstart', (e) => {
+      const msgWrapper = e.target.closest('.message-wrapper');
+      if (msgWrapper) {
+        longPressTriggered = false;
+        const touch = e.touches[0];
+        const msgId = Number(msgWrapper.dataset.id);
+        longPressTimer = setTimeout(() => {
+          longPressTriggered = true;
+          showContextMenu(touch.clientX, touch.clientY, msgId);
+        }, 500);
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', (e) => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      if (longPressTriggered) {
+        e.preventDefault();
+        longPressTriggered = false;
+      }
+    });
+
+    // 上下文菜单项点击
+    $('#messageContextMenu').addEventListener('click', (e) => {
+      const item = e.target.closest('.context-menu-item');
+      if (!item) return;
+      const action = item.dataset.action;
+      const msgId = Number($('#messageContextMenu').dataset.messageId);
+      hideContextMenu();
+
+      if (action === 'reply') {
+        handleReplyMessage(msgId);
+      } else if (action === 'edit') {
+        handleEditMessage(msgId);
+      } else if (action === 'delete') {
+        handleDeleteMessage(msgId);
+      }
+    });
+
+    // 取消回复按钮
+    $('#cancelReplyBtn').addEventListener('click', cancelReply);
+
+    // 点击回复引用跳转到原消息
+    document.addEventListener('click', (e) => {
+      const replyRef = e.target.closest('.message-reply-ref');
+      if (replyRef) {
+        const targetId = replyRef.dataset.replyToId;
+        if (targetId) {
+          scrollToMessage(Number(targetId));
+        }
       }
     });
 
@@ -612,6 +698,8 @@
         $('#albumViewOverlay').style.display = 'none';
         $('#albumViewImg').src = '';
         $('#albumViewLoading').style.display = 'none';
+        hideContextMenu();
+        cancelReply();
       }
     });
   }
@@ -1113,6 +1201,28 @@
         bubbleContent = escapedContent;
       }
 
+      let replyRefHtml = '';
+      if (msg.reply_to_id && msg.reply_preview) {
+        const replyMsg = messagesCache.find(m => m.id === msg.reply_to_id);
+        let replyThumbHtml = '';
+        if (replyMsg && replyMsg.message_type === 'image' && replyMsg.image_url) {
+          replyThumbHtml = `<img class="message-reply-ref-thumb" src="${escapeHtml(authImageUrl(replyMsg.image_url))}" alt="图片" loading="lazy">`;
+        }
+        const replySender = replyMsg ? replyMsg.sender : '';
+        replyRefHtml = `
+          <div class="message-reply-ref" data-reply-to-id="${msg.reply_to_id}">
+            <div class="message-reply-ref-indicator">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+            </div>
+            <div class="message-reply-ref-body">
+              ${replySender ? `<div class="message-reply-ref-sender">${escapeHtml(replySender)}</div>` : ''}
+              <div class="message-reply-ref-text">${escapeHtml(msg.reply_preview)}</div>
+            </div>
+            ${replyThumbHtml}
+          </div>
+        `;
+      }
+
       let statusHtml = '';
       if (isUnread) {
         statusHtml = `<div class="message-read-status read-status-unread"><span class="unread-dot"></span>未读</div>`;
@@ -1123,7 +1233,7 @@
       html += `
         <div class="message-wrapper ${senderClass}${unreadClass}" data-id="${msg.id}" data-read="${msg.is_read ? 1 : 0}" data-sender="${escapeHtml(msg.sender)}">
           <div class="message-sender">${senderAvatar} ${msg.sender}</div>
-          <div class="message-bubble">${bubbleContent}</div>
+          <div class="message-bubble">${replyRefHtml}${bubbleContent}</div>
           <div class="message-time">${time}${edited}</div>
           ${statusHtml}
           <div class="message-actions">
@@ -1148,6 +1258,108 @@
   function handleViewImage(url) {
     $('#imageViewImg').src = url;
     $('#imageViewOverlay').style.display = 'flex';
+  }
+
+  /**
+   * 显示消息上下文菜单
+   * 
+   * @param {number} x - 菜单显示的X坐标
+   * @param {number} y - 菜单显示的Y坐标
+   * @param {number} msgId - 目标消息ID
+   */
+  function showContextMenu(x, y, msgId) {
+    const menu = $('#messageContextMenu');
+    menu.dataset.messageId = msgId;
+    menu.style.display = 'block';
+
+    const menuRect = menu.getBoundingClientRect();
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+
+    let left = x;
+    let top = y;
+
+    if (left + menuRect.width > winW - 8) {
+      left = winW - menuRect.width - 8;
+    }
+    if (top + menuRect.height > winH - 8) {
+      top = winH - menuRect.height - 8;
+    }
+    if (left < 8) left = 8;
+    if (top < 8) top = 8;
+
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  }
+
+  /**
+   * 隐藏消息上下文菜单
+   */
+  function hideContextMenu() {
+    const menu = $('#messageContextMenu');
+    if (menu) menu.style.display = 'none';
+  }
+
+  /**
+   * 处理回复消息操作
+   * 
+   * 设置回复状态，在输入框上方显示回复预览栏
+   * 
+   * @param {number} msgId - 要回复的消息ID
+   */
+  function handleReplyMessage(msgId) {
+    const msg = messagesCache.find(m => m.id === msgId);
+    if (!msg) return;
+
+    replyingToMessage = msg;
+
+    const bar = $('#replyPreviewBar');
+    const senderEl = $('#replyPreviewSender');
+    const textEl = $('#replyPreviewText');
+
+    senderEl.textContent = msg.sender;
+
+    if (msg.message_type === 'image' && msg.image_url) {
+      textEl.textContent = '📷 图片';
+    } else {
+      textEl.textContent = msg.content ? msg.content.substring(0, 80) : '';
+    }
+
+    bar.style.display = 'flex';
+    bar.style.animation = 'none';
+    bar.offsetHeight;
+    bar.style.animation = '';
+
+    const input = $('#messageInput');
+    input.focus();
+    input.placeholder = `回复 ${msg.sender}...`;
+  }
+
+  /**
+   * 取消回复操作
+   * 
+   * 清除回复状态，隐藏回复预览栏，恢复输入框占位符
+   */
+  function cancelReply() {
+    replyingToMessage = null;
+    const bar = $('#replyPreviewBar');
+    bar.style.display = 'none';
+    const input = $('#messageInput');
+    input.placeholder = '写下想对Ta说的话...';
+  }
+
+  /**
+   * 滚动到指定消息并高亮
+   * 
+   * @param {number} msgId - 目标消息ID
+   */
+  function scrollToMessage(msgId) {
+    const el = document.querySelector(`.message-wrapper[data-id="${msgId}"]`);
+    if (!el) return;
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('message-highlight');
+    setTimeout(() => el.classList.remove('message-highlight'), 1500);
   }
 
   /**
@@ -1302,12 +1514,25 @@
     sendBtn.disabled = true;
 
     try {
+      const body = { content, sender };
+
+      if (replyingToMessage) {
+        body.reply_to_id = replyingToMessage.id;
+        if (replyingToMessage.message_type === 'image' && replyingToMessage.image_url) {
+          body.reply_preview = '📷 图片';
+        } else {
+          body.reply_preview = replyingToMessage.content
+            ? replyingToMessage.content.substring(0, 80)
+            : '';
+        }
+      }
+
       const res = await safeFetch(`${API_BASE}/api/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ content, sender })
+        body: JSON.stringify(body)
       });
 
       if (!res.ok) {
@@ -1322,6 +1547,7 @@
 
       input.value = '';
       input.style.height = '40px';
+      cancelReply();
       input.focus();
     } catch (err) {
       showToast('发送失败，请检查网络', 'error');
@@ -1540,6 +1766,28 @@
         bubbleContent = escapedContent;
       }
 
+      let replyRefHtml = '';
+      if (msg.reply_to_id && msg.reply_preview) {
+        const replyMsg = messagesCache.find(m => m.id === msg.reply_to_id);
+        let replyThumbHtml = '';
+        if (replyMsg && replyMsg.message_type === 'image' && replyMsg.image_url) {
+          replyThumbHtml = `<img class="message-reply-ref-thumb" src="${escapeHtml(authImageUrl(replyMsg.image_url))}" alt="图片" loading="lazy">`;
+        }
+        const replySender = replyMsg ? replyMsg.sender : '';
+        replyRefHtml = `
+          <div class="message-reply-ref" data-reply-to-id="${msg.reply_to_id}">
+            <div class="message-reply-ref-indicator">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+            </div>
+            <div class="message-reply-ref-body">
+              ${replySender ? `<div class="message-reply-ref-sender">${escapeHtml(replySender)}</div>` : ''}
+              <div class="message-reply-ref-text">${escapeHtml(msg.reply_preview)}</div>
+            </div>
+            ${replyThumbHtml}
+          </div>
+        `;
+      }
+
       let statusHtml = '';
       if (isUnread) {
         statusHtml = `<div class="message-read-status read-status-unread"><span class="unread-dot"></span>未读</div>`;
@@ -1550,7 +1798,7 @@
       html += `
         <div class="message-wrapper ${senderClass} message-new-arrive${unreadClass}" data-id="${msg.id}" data-read="${msg.is_read ? 1 : 0}" data-sender="${escapeHtml(msg.sender)}">
           <div class="message-sender">${senderAvatar} ${msg.sender}</div>
-          <div class="message-bubble">${bubbleContent}</div>
+          <div class="message-bubble">${replyRefHtml}${bubbleContent}</div>
           <div class="message-time">${time}${edited}</div>
           ${statusHtml}
           <div class="message-actions">
@@ -1945,12 +2193,21 @@
   /** 当前待删除的相册照片ID */
   let deletingAlbumPhotoId = null;
 
+  /** 当前正在拖拽的照片卡片元素 */
+  let draggingCard = null;
+
+  /** 拖拽排序防抖定时器 */
+  let reorderDebounceTimer = null;
+
+  /** 当前相册照片数据缓存，用于拖拽排序 */
+  let albumPhotosCache = [];
+
   /**
    * 初始化相册功能模块的所有事件绑定
-   * 
+   *
    * 包括：打开/关闭相册弹窗、图片上传、照片删除确认、
    *       大图查看（原图模式）、遮罩层点击关闭等
-   * 
+   *
    * @returns {void}
    */
   function initAlbum() {
@@ -2053,6 +2310,8 @@
     const countEl = $('#albumCount');
     countEl.textContent = photos.length > 0 ? `共 ${photos.length} 张` : '';
 
+    albumPhotosCache = [...photos];
+
     if (!photos || photos.length === 0) {
       grid.innerHTML = `
         <div class="album-empty">
@@ -2064,8 +2323,8 @@
       return;
     }
 
-    let html = '<div class="album-grid-inner">';
-    photos.forEach(photo => {
+    let html = '<div class="album-grid-inner sorting-mode">';
+    photos.forEach((photo, index) => {
       const date = new Date(photo.created_at + 'Z');
       const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
       const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -2078,7 +2337,7 @@
 
       if (isVideo) {
         html += `
-          <div class="album-photo-card" data-id="${photo.id}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="video">
+          <div class="album-photo-card" draggable="true" data-id="${photo.id}" data-index="${index}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="video">
             <div class="album-video-wrapper">
               <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy" class="album-video-thumb">
               <div class="album-video-play-icon">▶</div>
@@ -2092,7 +2351,7 @@
         `;
       } else {
         html += `
-          <div class="album-photo-card" data-id="${photo.id}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="image">
+          <div class="album-photo-card" draggable="true" data-id="${photo.id}" data-index="${index}" data-original-url="${escapeHtml(originalUrl)}" data-media-type="image">
             <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy">
             <button class="album-photo-delete" data-album-delete="${photo.id}" title="删除">✕</button>
             <div class="album-photo-info">
@@ -2105,6 +2364,8 @@
     });
     html += '</div>';
     grid.innerHTML = html;
+
+    initDragAndDrop(grid);
 
     grid.querySelectorAll('.album-photo-card').forEach(card => {
       card.addEventListener('click', (e) => {
@@ -2392,10 +2653,259 @@
       }
 
       showToast('照片已删除', 'success');
-      closeAlbumDeleteModal();
-      loadAlbumPhotos();
+    closeAlbumDeleteModal();
+    loadAlbumPhotos();
+  } catch (err) {
+    showToast('删除失败', 'error');
+    }
+  }
+
+  // ==================== 拖拽排序功能 ====================
+
+  /**
+   * 初始化相册网格的拖拽排序功能
+   *
+   * 使用 HTML5 Drag and Drop API 实现图片拖拽重排序。
+   * 支持以下交互：
+   * - 拖拽开始：卡片半透明化，显示抓取光标
+   * - 拖拽经过：目标位置高亮显示（虚线边框）
+   * - 放置完成：交换 DOM 位置并保存到后端
+   * - 防抖保存：避免频繁请求，800ms 内只发送最后一次
+   *
+   * @param {HTMLElement} grid - 相册网格容器元素
+   * @returns {void}
+   */
+  function initDragAndDrop(grid) {
+    const cards = grid.querySelectorAll('.album-photo-card');
+
+    cards.forEach(card => {
+      card.addEventListener('dragstart', handleDragStart);
+      card.addEventListener('dragend', handleDragEnd);
+      card.addEventListener('dragover', handleDragOver);
+      card.addEventListener('dragenter', handleDragEnter);
+      card.addEventListener('dragleave', handleDragLeave);
+      card.addEventListener('drop', handleDrop);
+    });
+  }
+
+  /**
+   * 处理拖拽开始事件
+   *
+   * 设置拖拽数据、添加视觉反馈样式。
+   * 使用 setTimeout 延迟添加 dragging 类，避免在 Firefox 中导致拖拽图像消失。
+   *
+   * @param {DragEvent} e - dragstart 事件对象
+   * @returns {void}
+   */
+  function handleDragStart(e) {
+    draggingCard = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', this.dataset.id);
+
+    setTimeout(() => {
+      this.classList.add('dragging');
+    }, 0);
+  }
+
+  /**
+   * 处理拖拽结束事件
+   *
+   * 清除所有拖拽相关的视觉状态类，
+   * 重置全局拖拽引用变量。
+   *
+   * @param {DragEvent} e - dragend 事件对象
+   * @returns {void}
+   */
+  function handleDragEnd(e) {
+    this.classList.remove('dragging');
+    document.querySelectorAll('.album-photo-card.drag-over').forEach(card => {
+      card.classList.remove('drag-over');
+    });
+
+    const placeholders = document.querySelectorAll('.album-drag-placeholder');
+    placeholders.forEach(p => p.remove());
+
+    draggingCard = null;
+  }
+
+  /**
+   * 处理拖拽经过事件（必须阻止默认行为以允许放置）
+   *
+   * @param {DragEvent} e - dragover 事件对象
+   * @returns {void}
+   */
+  function handleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }
+
+  /**
+   * 处理拖拽进入事件
+   *
+   * 当被拖拽元素进入另一个卡片区域时，
+   * 为目标卡片添加高亮样式，提供视觉反馈。
+   *
+   * @param {DragEvent} e - dragenter 事件对象
+   * @returns {void}
+   */
+  function handleDragEnter(e) {
+    e.preventDefault();
+    if (this !== draggingCard && !this.classList.contains('drag-over')) {
+      this.classList.add('drag-over');
+    }
+  }
+
+  /**
+   * 处理拖拽离开事件
+   *
+   * 当被拖拽元素离开某个卡片区域时，
+   * 移除该卡片的拖拽高亮样式。
+   *
+   * @param {DragEvent} e - dragleave 事件对象
+   * @returns {void}
+   */
+  function handleDragLeave(e) {
+    if (!this.contains(e.relatedTarget)) {
+      this.classList.remove('drag-over');
+    }
+  }
+
+  /**
+   * 处理放置事件（核心逻辑）
+   *
+   * 当用户释放鼠标完成拖拽时执行：
+   * 1. 阻止默认浏览器行为
+   * 2. 清除所有高亮状态
+   * 3. 计算源位置和目标位置的索引
+   * 4. 在 DOM 中交换两个卡片的位置
+   * 5. 更新数据缓存中的顺序
+   * 6. 调用防抖函数保存到后端
+   *
+   * @param {DragEvent} e - drop 事件对象
+   * @returns {void}
+   */
+  function handleDrop(e) {
+    e.preventDefault();
+
+    if (this === draggingCard) return;
+
+    this.classList.remove('drag-over');
+
+    const gridInner = document.querySelector('.album-grid-inner');
+    const allCards = [...gridInner.querySelectorAll('.album-photo-card')];
+    const fromIndex = allCards.indexOf(draggingCard);
+    const toIndex = allCards.indexOf(this);
+
+    if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+
+    if (fromIndex < toIndex) {
+      gridInner.insertBefore(draggingCard, this.nextSibling);
+    } else {
+      gridInner.insertBefore(draggingCard, this);
+    }
+
+    updatePhotoOrderFromDOM();
+
+    debounceSaveOrder();
+  }
+
+  /**
+   * 根据 DOM 中卡片的实际顺序更新数据缓存
+   *
+   * 遍历当前相册网格中的所有卡片，
+   * 按照 DOM 顺序重新排列 albumPhotosCache 数组，
+   * 并为每张照片分配新的 sort_order 值（从0开始递增）。
+   *
+   * @returns {void}
+   */
+  function updatePhotoOrderFromDOM() {
+    const gridInner = document.querySelector('.album-grid-inner');
+    if (!gridInner) return;
+
+    const cards = gridInner.querySelectorAll('.album-photo-card');
+    const newOrder = [];
+
+    cards.forEach((card, index) => {
+      const photoId = Number(card.dataset.id);
+      const photo = albumPhotosCache.find(p => p.id === photoId);
+      if (photo) {
+        newOrder.push({
+          id: photoId,
+          sort_order: index
+        });
+        const cacheIndex = albumPhotosCache.findIndex(p => p.id === photoId);
+        if (cacheIndex !== -1) {
+          albumPhotosCache.splice(cacheIndex, 1);
+          albumPhotosCache.splice(index, 0, photo);
+        }
+      }
+    });
+  }
+
+  /**
+   * 防抖保存排序到后端
+   *
+   * 使用防抖机制避免频繁发送网络请求：
+   * - 用户快速连续拖拽多次时，只在最后一次操作后 800ms 发送请求
+   * - 如果已有待执行的定时器，先清除再设置新的
+   * - 保存成功后显示 Toast 提示
+   *
+   * @returns {void}
+   */
+  function debounceSaveOrder() {
+    if (reorderDebounceTimer) {
+      clearTimeout(reorderDebounceTimer);
+    }
+
+    reorderDebounceTimer = setTimeout(async () => {
+      await saveAlbumOrder();
+      reorderDebounceTimer = null;
+    }, 800);
+  }
+
+  /**
+   * 将当前排序保存到后端服务器
+   *
+   * 收集所有卡片的 ID 和对应的 sort_order，
+   * 通过 PUT /api/album/reorder 接口一次性提交到服务端。
+   * 服务端使用数据库事务确保原子性更新。
+   *
+   * 成功：显示"排序已保存"提示
+   * 失败：显示错误信息并提示用户刷新页面
+   *
+   * @async
+   * @returns {Promise<void>}
+   */
+  async function saveAlbumOrder() {
+    try {
+      const gridInner = document.querySelector('.album-grid-inner');
+      if (!gridInner) return;
+
+      const cards = gridInner.querySelectorAll('.album-photo-card');
+      const orders = [];
+
+      cards.forEach((card, index) => {
+        const photoId = Number(card.dataset.id);
+        orders.push({ id: photoId, sort_order: index });
+      });
+
+      if (orders.length === 0) return;
+
+      const res = await safeFetch(`${API_BASE}/api/album/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '保存排序失败');
+      }
+
+      showToast('排序已保存 💕', 'success');
     } catch (err) {
-      showToast('删除失败', 'error');
+      console.error('保存相册排序失败:', err);
+      showToast('排序保存失败，请刷新页面重试', 'error');
     }
   }
 

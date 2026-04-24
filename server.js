@@ -731,7 +731,7 @@ app.get('/api/messages/poll', authMiddleware, (req, res) => {
  */
 app.post('/api/messages', authMiddleware, validateCsrfToken, (req, res) => {
   try {
-    const { content, sender, message_type, image_url } = req.body;
+    const { content, sender, message_type, image_url, reply_to_id, reply_preview } = req.body;
 
     // 发送者身份白名单校验
     if (!sender || !['小洋', '小蔡'].includes(sender)) {
@@ -760,10 +760,33 @@ app.post('/api/messages', authMiddleware, validateCsrfToken, (req, res) => {
       }
     }
 
+    // 回复消息校验
+    let finalReplyToId = null;
+    let finalReplyPreview = null;
+    if (reply_to_id) {
+      const replyId = Number(reply_to_id);
+      if (!isNaN(replyId) && replyId > 0) {
+        const db = getDb();
+        const replyMsg = db.prepare('SELECT id, content, sender, message_type, image_url FROM messages WHERE id = ?').get(replyId);
+        if (replyMsg) {
+          finalReplyToId = replyId;
+          if (reply_preview) {
+            finalReplyPreview = String(reply_preview).substring(0, 200);
+          } else {
+            if (replyMsg.message_type === 'image' && replyMsg.image_url) {
+              finalReplyPreview = '📷 图片';
+            } else {
+              finalReplyPreview = replyMsg.content ? replyMsg.content.substring(0, 80) : '';
+            }
+          }
+        }
+      }
+    }
+
     const db = getDb();
     const result = db.prepare(
-      'INSERT INTO messages (content, sender, message_type, image_url) VALUES (?, ?, ?, ?)'
-    ).run(content || '', sender, type, image_url || null);
+      'INSERT INTO messages (content, sender, message_type, image_url, reply_to_id, reply_preview) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(content || '', sender, type, image_url || null, finalReplyToId, finalReplyPreview);
 
     // 返回完整的新消息记录（含自动生成的id和时间戳）
     const message = db.prepare('SELECT * FROM messages WHERE id = ?').get(result.lastInsertRowid);
@@ -1236,14 +1259,15 @@ async function generateThumbnail(filename) {
 /**
  * GET /api/album
  * 获取相册照片列表
- * 
+ *
  * 返回每张照片的信息及访问URL（含缩略图URL）。
+ * 按 sort_order 升序排列（用户自定义排序），sort_order 相同则按 created_at 降序。
  */
 app.get('/api/album', authMiddleware, (req, res) => {
   try {
     const db = getDb();
     const photos = db.prepare(
-      'SELECT id, filename, original_name, file_size, uploaded_by, created_at, media_type FROM photos ORDER BY created_at DESC'
+      'SELECT id, filename, original_name, file_size, uploaded_by, created_at, media_type, sort_order FROM photos ORDER BY sort_order ASC, created_at DESC'
     ).all();
     // 为每张照片附加访问URL和缩略图URL
     res.json(photos.map(p => ({
@@ -1373,6 +1397,48 @@ app.delete('/api/album/:id', authMiddleware, validateCsrfToken, (req, res) => {
   } catch (err) {
     console.error('删除相册图片失败:', err);
     res.status(500).json({ error: '删除相册图片失败' });
+  }
+});
+
+/**
+ * PUT /api/album/reorder
+ * 批量更新相册照片的排序顺序
+ *
+ * 请求体格式: { "orders": [{ "id": 1, "sort_order": 0 }, { "id": 2, "sort_order": 1 }] }
+ * 使用事务确保原子性，一次性更新所有照片的排序值。
+ */
+app.put('/api/album/reorder', authMiddleware, validateCsrfToken, (req, res) => {
+  try {
+    const { orders } = req.body;
+
+    if (!Array.isArray(orders) || orders.length === 0) {
+      return res.status(400).json({ error: '无效的排序数据' });
+    }
+
+    for (const item of orders) {
+      if (typeof item.id !== 'number' || typeof item.sort_order !== 'number') {
+        return res.status(400).json({ error: '排序数据格式错误' });
+      }
+    }
+
+    const db = getDb();
+
+    const updateOrder = db.prepare(
+      'UPDATE photos SET sort_order = ? WHERE id = ?'
+    );
+
+    const updateMany = db.transaction((items) => {
+      for (const item of items) {
+        updateOrder.run(item.sort_order, item.id);
+      }
+    });
+
+    updateMany(orders);
+
+    res.json({ message: '排序已保存', updated: orders.length });
+  } catch (err) {
+    console.error('更新相册排序失败:', err);
+    res.status(500).json({ error: '更新相册排序失败' });
   }
 });
 
