@@ -66,6 +66,8 @@ const { encryptFile, streamDecryptedFile, streamDecryptedFileWithRange, encryptD
 
 /** 自定义邮件工具模块，提供邮箱设置、邮件发送、提醒调度等功能 */
 const { saveUserEmail, getUserEmail, sendReminderEmail, startReminderScheduler, getEmailLogs, isValidEmail } = require('./email-utils');
+const { saveUserLocation, getUserLocation, saveWeatherReminderSetting, getWeatherReminderSetting, sendWeatherEmail, startWeatherScheduler } = require('./weather-utils');
+const { geocode, reverseGeocode } = require('./geocode-utils');
 
 /** FFmpeg视频处理封装库，用于视频缩略图截取 */
 const ffmpeg = require('fluent-ffmpeg');
@@ -1517,6 +1519,107 @@ app.get('/api/email/logs', authMiddleware, (req, res) => {
   }
 });
 
+// ==================== 位置与天气设置 API ====================
+
+app.get('/api/location', authMiddleware, (req, res) => {
+  try {
+    const location = getUserLocation(req.user.user_id);
+    res.json(location || { lat: null, lng: null, name: '' });
+  } catch (err) {
+    console.error('获取位置设置失败:', err);
+    res.status(500).json({ error: '获取位置设置失败' });
+  }
+});
+
+app.post('/api/location', authMiddleware, validateCsrfToken, (req, res) => {
+  try {
+    const { lat, lng, name } = req.body;
+    if (lat === undefined || lng === undefined) {
+      return res.status(400).json({ error: '缺少经纬度信息' });
+    }
+    const result = saveUserLocation(req.user.user_id, lat, lng, name || '');
+    res.json(result);
+  } catch (err) {
+    console.error('保存位置设置失败:', err);
+    res.status(500).json({ error: '保存位置设置失败' });
+  }
+});
+
+app.get('/api/weather-reminder', authMiddleware, (req, res) => {
+  try {
+    const enabled = getWeatherReminderSetting(req.user.user_id);
+    res.json({ enabled });
+  } catch (err) {
+    console.error('获取天气提醒设置失败:', err);
+    res.status(500).json({ error: '获取天气提醒设置失败' });
+  }
+});
+
+app.post('/api/weather-reminder', authMiddleware, validateCsrfToken, (req, res) => {
+  try {
+    const { enabled } = req.body;
+    const result = saveWeatherReminderSetting(req.user.user_id, !!enabled);
+    res.json(result);
+  } catch (err) {
+    console.error('保存天气提醒设置失败:', err);
+    res.status(500).json({ error: '保存天气提醒设置失败' });
+  }
+});
+
+app.post('/api/weather-reminder/test', authMiddleware, validateCsrfToken, async (req, res) => {
+  try {
+    const email = getUserEmail(req.user.user_id);
+    if (!email) {
+      return res.status(400).json({ error: '请先设置邮箱地址' });
+    }
+    const location = getUserLocation(req.user.user_id);
+    if (!location) {
+      return res.status(400).json({ error: '请先设置位置信息' });
+    }
+    const result = await sendWeatherEmail(email, req.user.display_name, location.lat, location.lng, location.name);
+    if (result.success) {
+      res.json({ success: true, message: '天气测试邮件已发送' });
+    } else {
+      res.status(500).json({ error: '邮件发送失败: ' + result.error });
+    }
+  } catch (err) {
+    console.error('天气测试邮件发送失败:', err);
+    res.status(500).json({ error: '邮件发送失败' });
+  }
+});
+
+app.post('/api/geocode', authMiddleware, async (req, res) => {
+  try {
+    const { address } = req.body;
+    if (!address || !address.trim()) {
+      return res.status(400).json({ error: '请输入地址' });
+    }
+    const result = await geocode(address.trim());
+    if (result) {
+      res.json(result);
+    } else {
+      res.status(404).json({ error: '未找到该地址，请尝试更详细的描述（如：江西省赣州市龙南市渡江镇）' });
+    }
+  } catch (err) {
+    console.error('地理编码失败:', err);
+    res.status(500).json({ error: '地址解析服务异常' });
+  }
+});
+
+app.post('/api/reverse-geocode', authMiddleware, async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (lat === undefined || lng === undefined) {
+      return res.status(400).json({ error: '缺少经纬度' });
+    }
+    const name = await reverseGeocode(lat, lng);
+    res.json({ name: name || '' });
+  } catch (err) {
+    console.error('逆地理编码失败:', err);
+    res.status(500).json({ error: '逆地理编码服务异常' });
+  }
+});
+
 /**
  * PUT /api/messages/:id
  * 编辑消息内容
@@ -1650,6 +1753,7 @@ app.listen(PORT, () => {
   }
 
   startReminderScheduler();
+  startWeatherScheduler();
 
   console.log(`💕 恋爱记事簿服务已启动: http://localhost:${PORT}`);
 });

@@ -1698,6 +1698,10 @@ html, body {
     font-size: 20px;
   }
 
+  .header-right {
+    gap: 7px;
+  }
+
   .current-user {
     font-size: 12px;
     padding: 3px 10px;
@@ -2200,6 +2204,123 @@ html, body {
 
 .modal-btn-primary:active {
   transform: translateY(0);
+}
+
+.email-section-divider {
+  height: 1px;
+  background: var(--gray-200);
+  margin: 20px 0;
+}
+
+.location-input-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.location-input {
+  flex: 1;
+  padding-right: 16px !important;
+}
+
+.get-location-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--gray-200);
+  background: var(--white);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.get-location-btn:hover {
+  border-color: var(--pink-400);
+  background: var(--pink-50);
+}
+
+.get-location-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.weather-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--pink-50);
+  border-radius: var(--radius-md);
+}
+
+.weather-toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.weather-toggle-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.weather-toggle-desc {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--gray-300);
+  border-radius: 26px;
+  transition: all 0.3s ease;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--white);
+  border-radius: 50%;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: linear-gradient(135deg, var(--pink-400), var(--pink-500));
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(22px);
 }
 
 /* ========== 相册弹窗 ========== */

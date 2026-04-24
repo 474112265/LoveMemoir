@@ -158,6 +158,18 @@ function initTables() {
   try {
     db.exec(`ALTER TABLE users ADD COLUMN email_iv TEXT DEFAULT NULL`);
   } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN location_lat REAL DEFAULT NULL`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN location_lng REAL DEFAULT NULL`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN location_name TEXT DEFAULT NULL`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN weather_reminder INTEGER DEFAULT 0`);
+  } catch (e) {}
 
   // ==================== 种子数据初始化 ====================
   

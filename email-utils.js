@@ -17,8 +17,8 @@ const SMTP_CONFIG = {
   }
 };
 
-const REMINDER_COOLDOWN = 10 * 60 * 1000;
-const REMINDER_DELAY = 3 * 60 * 1000;
+const REMINDER_COOLDOWN = 3 * 60 * 1000;
+const REMINDER_DELAY = 1 * 60 * 1000;
 
 const emailLog = [];
 const MAX_LOG_ENTRIES = 200;
@@ -106,7 +106,7 @@ function getEmailTemplate(senderName) {
 <p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.8;">你的另一半正在等你回复哦～快去看看吧！💌</p>
 <table width="100%" cellpadding="0" cellspacing="0">
 <tr><td align="center">
-<a href="https://love.memoir" style="display:inline-block;background:linear-gradient(135deg,#ec4899,#f472b6);color:#ffffff;text-decoration:none;padding:14px 40px;border-radius:50px;font-size:16px;font-weight:600;letter-spacing:0.5px;box-shadow:0 4px 12px rgba(236,72,153,0.3);">💕 去回复Ta</a>
+<a href="http://106.52.180.78:520/" style="display:inline-block;background:linear-gradient(135deg,#ec4899,#f472b6);color:#ffffff;text-decoration:none;padding:14px 40px;border-radius:50px;font-size:16px;font-weight:600;letter-spacing:0.5px;box-shadow:0 4px 12px rgba(236,72,153,0.3);">💕 去回复Ta</a>
 </td></tr>
 </table>
 </td></tr>
@@ -237,5 +237,6 @@ module.exports = {
   getEmailLogs,
   isValidEmail,
   encryptEmail,
-  decryptEmail
+  decryptEmail,
+  addLog
 };

@@ -252,7 +252,7 @@
       </div>
       <div class="modal-body">
         <div class="email-settings-desc">
-          <p>设置邮箱后，当收到新消息超过3分钟未回复时，系统将自动发送邮件提醒。</p>
+          <p>设置邮箱后，当收到新消息超过1分钟未回复时，系统将自动发送邮件提醒。</p>
         </div>
         <div class="email-input-group">
           <label for="emailInput" class="email-label">邮箱地址</label>
@@ -263,14 +263,41 @@
           <div id="emailError" class="email-error" style="display:none;"></div>
           <div id="emailStatus" class="email-status" style="display:none;"></div>
         </div>
+
+        <div class="email-section-divider"></div>
+
+        <div class="email-input-group">
+          <label class="email-label">📍 位置信息</label>
+          <div class="location-input-row">
+            <input type="text" id="locationInput" class="email-input location-input" placeholder="输入城市名(如：广州)或点击右侧按钮获取">
+            <button id="getLocationBtn" class="get-location-btn" title="获取当前位置">📍</button>
+          </div>
+          <div id="locationStatus" class="email-status" style="display:none;"></div>
+        </div>
+
+        <div class="email-input-group">
+          <div class="weather-toggle-row">
+            <div class="weather-toggle-info">
+              <span class="weather-toggle-label">🌤️ 每日天气提醒</span>
+              <span class="weather-toggle-desc">每天早上8点发送天气提醒邮件</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="weatherReminderToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
         <div class="email-reminder-info">
           <div class="email-reminder-icon">💡</div>
           <div class="email-reminder-text">
-            <p>提醒内容：<strong>同一邮箱10分钟内最多收到一封提醒邮件</strong></p>
+            <p>消息提醒：同一邮箱3分钟内最多收到一封提醒邮件</p>
+            <p>天气提醒：需同时设置邮箱和位置后开启</p>
           </div>
         </div>
       </div>
       <div class="modal-footer">
+        <button id="testWeatherBtn" class="modal-btn modal-btn-secondary" disabled>测试天气邮件</button>
         <button id="testEmailBtn" class="modal-btn modal-btn-secondary" disabled>发送测试邮件</button>
         <button id="saveEmailBtn" class="modal-btn modal-btn-primary">保存设置</button>
       </div>

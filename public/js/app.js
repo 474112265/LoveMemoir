@@ -2223,6 +2223,9 @@
     $('#clearEmailBtn').addEventListener('click', clearEmailInput);
     $('#saveEmailBtn').addEventListener('click', saveEmailSettings);
     $('#testEmailBtn').addEventListener('click', sendTestEmail);
+    $('#getLocationBtn').addEventListener('click', getCurrentLocation);
+    $('#weatherReminderToggle').addEventListener('change', toggleWeatherReminder);
+    $('#testWeatherBtn').addEventListener('click', sendTestWeatherEmail);
     $('#closeAlbumModal').addEventListener('click', closeAlbumModal);
     $('#albumImageInput').addEventListener('change', handleAlbumUpload);
     $('#albumModal').addEventListener('click', (e) => {
@@ -2251,6 +2254,8 @@
 
   // ==================== 邮箱设置 ====================
 
+  let currentLocation = null;
+
   async function openEmailSettings() {
     $('#emailSettingsModal').style.display = 'flex';
     const emailInput = $('#emailInput');
@@ -2258,6 +2263,10 @@
     const emailStatus = $('#emailStatus');
     const clearBtn = $('#clearEmailBtn');
     const testBtn = $('#testEmailBtn');
+    const locationInput = $('#locationInput');
+    const locationStatus = $('#locationStatus');
+    const weatherToggle = $('#weatherReminderToggle');
+    const testWeatherBtn = $('#testWeatherBtn');
 
     emailInput.value = '';
     emailInput.classList.remove('email-input-error', 'email-input-success');
@@ -2265,6 +2274,11 @@
     emailStatus.style.display = 'none';
     clearBtn.style.display = 'none';
     testBtn.disabled = true;
+    locationInput.value = '';
+    locationStatus.style.display = 'none';
+    weatherToggle.checked = false;
+    testWeatherBtn.disabled = true;
+    currentLocation = null;
 
     try {
       const res = await safeFetch(`${API_BASE}/api/email`);
@@ -2279,6 +2293,30 @@
       }
     } catch (err) {
       console.error('获取邮箱设置失败:', err);
+    }
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/location`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.lat !== null && data.lng !== null) {
+          currentLocation = { lat: data.lat, lng: data.lng, name: data.name };
+          locationInput.value = data.name || `${data.lat.toFixed(4)}, ${data.lng.toFixed(4)}`;
+          updateWeatherBtnState();
+        }
+      }
+    } catch (err) {
+      console.error('获取位置设置失败:', err);
+    }
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/weather-reminder`);
+      if (res.ok) {
+        const data = await res.json();
+        weatherToggle.checked = !!data.enabled;
+      }
+    } catch (err) {
+      console.error('获取天气提醒设置失败:', err);
     }
   }
 
@@ -2329,6 +2367,8 @@
     const emailStatus = $('#emailStatus');
     const saveBtn = $('#saveEmailBtn');
     const testBtn = $('#testEmailBtn');
+    const locationInput = $('#locationInput');
+    const locationStatus = $('#locationStatus');
     const value = emailInput.value.trim();
 
     if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
@@ -2360,7 +2400,6 @@
         emailStatus.style.display = 'block';
         testBtn.disabled = !value;
         $('#clearEmailBtn').style.display = value ? 'flex' : 'none';
-        showToast(value ? '邮箱设置已保存' : '邮箱已清除', 'success');
       } else {
         emailInput.classList.add('email-input-error');
         emailInput.classList.remove('email-input-success');
@@ -2374,10 +2413,51 @@
       emailError.textContent = '网络错误，请稍后重试';
       emailError.style.display = 'block';
       emailStatus.style.display = 'none';
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '保存设置';
     }
+
+    const locationValue = locationInput.value.trim();
+    if (locationValue && (!currentLocation || currentLocation.name !== locationValue)) {
+      try {
+        locationStatus.textContent = '正在解析地址...';
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '';
+        const geoRes = await safeFetch(`${API_BASE}/api/geocode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: locationValue })
+        });
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          currentLocation = { lat: geoData.lat, lng: geoData.lng, name: geoData.name };
+          await safeFetch(`${API_BASE}/api/location`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat: geoData.lat, lng: geoData.lng, name: geoData.name })
+          });
+          locationInput.value = geoData.name || locationValue;
+          locationStatus.textContent = '✅ 地址解析成功';
+          locationStatus.style.display = 'block';
+          locationStatus.style.color = '';
+          updateWeatherBtnState();
+        } else {
+          const errData = await geoRes.json().catch(() => ({}));
+          locationStatus.textContent = '⚠️ ' + (errData.error || '未找到该地址，请尝试更详细的描述');
+          locationStatus.style.display = 'block';
+          locationStatus.style.color = '#d97706';
+        }
+      } catch (e) {
+        locationStatus.textContent = '⚠️ 地址解析失败，请稍后重试';
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '#d97706';
+      }
+    }
+
+    if (value || locationValue) {
+      showToast('设置已保存', 'success');
+    }
+
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存设置';
   }
 
   async function sendTestEmail() {
@@ -2415,6 +2495,156 @@
       testBtn.textContent = '发送测试邮件';
       setTimeout(() => {
         emailStatus.style.color = '';
+      }, 3000);
+    }
+  }
+
+  function updateWeatherBtnState() {
+    const testWeatherBtn = $('#testWeatherBtn');
+    const hasEmail = !!$('#emailInput').value.trim();
+    const hasLocation = !!currentLocation;
+    testWeatherBtn.disabled = !(hasEmail && hasLocation);
+  }
+
+  function getCurrentLocation() {
+    const locationInput = $('#locationInput');
+    const locationStatus = $('#locationStatus');
+    const getBtn = $('#getLocationBtn');
+
+    if (!navigator.geolocation) {
+      locationStatus.textContent = '⚠️ 浏览器不支持定位，请手动输入城市名';
+      locationStatus.style.display = 'block';
+      locationStatus.style.color = '#d97706';
+      return;
+    }
+
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      locationStatus.textContent = '⚠️ HTTP下无法自动定位，请手动输入城市名(如：广州)';
+      locationStatus.style.display = 'block';
+      locationStatus.style.color = '#d97706';
+      locationInput.focus();
+      return;
+    }
+
+    getBtn.disabled = true;
+    getBtn.textContent = '⏳';
+    locationStatus.textContent = '正在获取位置...';
+    locationStatus.style.display = 'block';
+    locationStatus.style.color = '';
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+
+        let locationName = '';
+        try {
+          const res = await safeFetch(`${API_BASE}/api/reverse-geocode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat, lng })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            locationName = data.name || '';
+          }
+        } catch (e) {}
+
+        currentLocation = { lat, lng, name: locationName };
+        locationInput.value = locationName || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        locationStatus.textContent = '✅ 位置获取成功';
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '';
+
+        try {
+          await safeFetch(`${API_BASE}/api/location`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat, lng, name: locationName })
+          });
+        } catch (e) {}
+
+        updateWeatherBtnState();
+        getBtn.disabled = false;
+        getBtn.textContent = '📍';
+      },
+      (error) => {
+        let msg = '获取位置失败';
+        if (error.code === 1) msg = '定位权限被拒绝，请在浏览器设置中允许，或手动输入城市名';
+        else if (error.code === 2) msg = '位置信息不可用，请手动输入城市名';
+        else if (error.code === 3) msg = '获取位置超时，请手动输入城市名';
+
+        locationStatus.textContent = '⚠️ ' + msg;
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '#d97706';
+        getBtn.disabled = false;
+        getBtn.textContent = '📍';
+        locationInput.focus();
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  }
+
+  async function toggleWeatherReminder() {
+    const toggle = $('#weatherReminderToggle');
+    const enabled = toggle.checked;
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/weather-reminder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+
+      if (res.ok) {
+        showToast(enabled ? '天气提醒已开启' : '天气提醒已关闭', 'success');
+      } else {
+        toggle.checked = !enabled;
+        const data = await res.json();
+        showToast(data.error || '设置失败', 'error');
+      }
+    } catch (err) {
+      toggle.checked = !enabled;
+      showToast('网络错误', 'error');
+    }
+  }
+
+  async function sendTestWeatherEmail() {
+    const testBtn = $('#testWeatherBtn');
+    const locationStatus = $('#locationStatus');
+
+    testBtn.disabled = true;
+    testBtn.textContent = '发送中...';
+
+    try {
+      const res = await safeFetch(`${API_BASE}/api/weather-reminder/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        locationStatus.textContent = '✅ ' + (data.message || '天气测试邮件已发送');
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '';
+        showToast(data.message || '天气测试邮件已发送', 'success');
+      } else {
+        locationStatus.textContent = '❌ ' + (data.error || '发送失败');
+        locationStatus.style.display = 'block';
+        locationStatus.style.color = '#ef4444';
+        showToast(data.error || '发送失败', 'error');
+      }
+    } catch (err) {
+      locationStatus.textContent = '❌ 网络错误，请稍后重试';
+      locationStatus.style.display = 'block';
+      locationStatus.style.color = '#ef4444';
+      showToast('网络错误', 'error');
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = '测试天气邮件';
+      setTimeout(() => {
+        locationStatus.style.color = '';
       }, 3000);
     }
   }
