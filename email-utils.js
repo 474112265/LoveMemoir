@@ -150,11 +150,11 @@ function getUserEmail(userId) {
 }
 
 async function sendReminderEmail(toEmail, senderName) {
-  const cooldownKey = toEmail;
+  const cooldownKey = `${toEmail}_${senderName}`;
   const now = Date.now();
 
   if (lastReminderSent[cooldownKey] && (now - lastReminderSent[cooldownKey]) < REMINDER_COOLDOWN) {
-    addLog('info', '邮件冷却中，跳过发送', `收件人: ${toEmail.substring(0, 3)}***`);
+    addLog('info', '邮件冷却中，跳过发送', `收件人: ${toEmail.substring(0, 3)}***, 发送者: ${senderName}`);
     return { success: true, skipped: true };
   }
 
@@ -168,7 +168,7 @@ async function sendReminderEmail(toEmail, senderName) {
     });
 
     lastReminderSent[cooldownKey] = now;
-    addLog('success', '提醒邮件发送成功', `收件人: ${toEmail.substring(0, 3)}***, messageId: ${info.messageId}`);
+    addLog('success', '提醒邮件发送成功', `收件人: ${toEmail.substring(0, 3)}***, 发送者: ${senderName}, messageId: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (err) {
     addLog('error', '提醒邮件发送失败', err.message);
