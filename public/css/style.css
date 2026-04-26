@@ -327,7 +327,6 @@ html, body {
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--pink-100);
   flex-shrink: 0;
-  contain: layout style;
 }
 
 .header-left {
@@ -401,7 +400,6 @@ html, body {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   position: relative;
-  contain: strict;
 }
 
 .chat-area::-webkit-scrollbar {
@@ -1829,7 +1827,6 @@ html, body {
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--pink-100);
   flex-shrink: 0;
-  contain: layout style;
 }
 
 .input-row {
