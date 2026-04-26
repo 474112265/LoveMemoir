@@ -406,7 +406,7 @@ curl http://127.0.0.1:520/
 │   │   ├── avatar_girl.png    # 小洋的头像图片
 │   │   └── avatar_boy.png     # 小蔡的头像图片
 │   └── images/
-│       ├── xiaoyang-avatar.png
+│       ├── xiaozhong-avatar.png
 │       └── xiaocai-avatar.png
 │
 ├── data/                       # 运行时数据目录（首次启动自动创建）

@@ -179,14 +179,14 @@ function initTables() {
     const insertUser = db.prepare(
       'INSERT INTO users (username, password, display_name) VALUES (?, ?, ?)'
     );
-    insertUser.run('xiaozhong', hashPassword('love0815'), '小洋');
+    insertUser.run('xiaoyang', hashPassword('love0815'), '小洋');
     insertUser.run('xiaocai', hashPassword('love0815'), '小蔡');
   } else {
     // 已有数据：更新显示名称为中文昵称
     const updateDisplayName = db.prepare(
       'UPDATE users SET display_name = ? WHERE username = ?'
     );
-    updateDisplayName.run('小洋', 'xiaozhong');
+    updateDisplayName.run('小洋', 'xiaoyang');
 
     // 将旧版明文密码迁移为PBKDF2哈希格式
     const users = db.prepare('SELECT id, password FROM users').all();

@@ -470,10 +470,190 @@ app.use(cors({
 // JSON请求体解析中间件（限制1MB防止DoS攻击）
 app.use(express.json({ limit: '1mb' }));
 
-// 静态文件服务中间件（禁止访问隐藏文件如.gitignore等）
-app.use(express.static(path.join(__dirname, 'public'), { dotfiles: 'deny' }));
-
 // ==================== API 路由定义 ====================
+
+// ---------- 表情包搜索路由（必须在 static 之前避免被拦截） ----------
+async function tryFetchTenorInternal(searchTerm, limitNum, pos) {
+  const tenorKey = process.env.TENOR_API_KEY || 'AIzaSyA8YiIUFa5w01oQe0T2_9KH1K7tU_FqHcE';
+  const tenorUrl = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(searchTerm)}&key=${tenorKey}&limit=${limitNum}&pos=${pos}&media_filter=gif,tinygif,mediumgif&contentfilter=high&ar_range=standard`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  let fetchRes;
+  try {
+    fetchRes = await fetch(tenorUrl, { headers: { 'Accept': 'application/json' }, signal: controller.signal });
+  } finally { clearTimeout(timeoutId); }
+  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
+  return await fetchRes.json();
+}
+
+async function tryFetchDoutula(keyword, limitNum, pageNum) {
+  const doutulaUrl = `https://www.doutula.com/api/search?keyword=${encodeURIComponent(keyword)}&mime=0&page=${pageNum + 1}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  let fetchRes;
+  try {
+    fetchRes = await fetch(doutulaUrl, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.doutula.com/' },
+      signal: controller.signal
+    });
+  } finally { clearTimeout(timeoutId); }
+  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
+  return await fetchRes.json();
+}
+
+async function tryFetchEmojiFamily(searchQuery, limitNum) {
+  const url = `https://www.emoji.family/api/emojis?search=${encodeURIComponent(searchQuery)}&limit=${Math.min(limitNum * 2, 50)}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+  let fetchRes;
+  try { fetchRes = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: controller.signal }); }
+  finally { clearTimeout(timeoutId); }
+  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
+  return await fetchRes.json();
+}
+
+// 表情包搜索路由（必须在 static 之前）
+app.get('/api/sticker/test', (req, res) => {
+  res.json({ status: 'ok', time: Date.now() });
+});
+
+const SEARCH_SUGGESTIONS = ['开心', '爱你', '晚安', '么么', '抱抱', '想念', '生日快乐', '加油', '可爱', '亲亲', '谢谢', 'hello', 'love', 'happy', 'cute', 'kiss', 'hug'];
+
+app.get('/api/sticker/suggestions', authMiddleware, (req, res) => {
+  res.json({ suggestions: SEARCH_SUGGESTIONS });
+});
+
+const stickerCache = new Map();
+const STICKER_CACHE_TTL = 5 * 60 * 1000;
+
+function getCachedStickers(key) { const entry = stickerCache.get(key); if (!entry) return null; if (Date.now() - entry.ts > STICKER_CACHE_TTL) { stickerCache.delete(key); return null; } return entry.data; }
+function setCachedStickers(key, data) { stickerCache.set(key, { data, ts: Date.now() }); }
+
+const localDb = {
+  '开心': ['😀','😃','😄','😁','😆','😊','🙂','😸','🤩','✨','🎉','💖','❤️‍🔥'],
+  '快乐': ['😊','😄','🥳','🎉','🌟','💫','✨','😆','🤗','💕'],
+  '爱你': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','💕','💞','💓','💗','💘','💝','❤️‍🔥','❤️‍🩹','♥️','💋','😘','🥰','😍','🩷','🩵','🩶','🤎'],
+  'love': ['❤️','💕','💖','💗','💝','💘','💞','💓','❣️','😘','😍','🥰','👩‍❤️‍👨','👩‍❤️‍💋‍👨','♥️','💋','💌','🌹','🌷','💐'],
+  'happy': ['😀','😃','😄','😁','😆','😊','🙂','🤩','🥳','🌟','✨','💫','🎉','🎊','🥰','😸'],
+  '晚安': ['🌙','⭐','🌟','💫','😴','🛏️','🌜','🌛','🌚','☪️','🌙','💤','👋','👋🏻','🫂','🤗','💕'],
+  '么么': ['😘','😚','😙','💋','👄','💏','💑','😽','🥰','💕','💗','❤️','🩷'],
+  '抱抱': ['🤗','🫂','🫡','👐','🤲','🙌','👋','👐','💪','🦾','❤️','💕','🧸','🧸','🧸','🧸'],
+  '想念': ['💭','💕','💗','❤️','🥺','🥹','😢','😿','🫠','💔','🫂','🤗','🌙','⭐','✨','💌'],
+  '生日': ['🎂','🎉','🎈','🎁','🎊','🥳','🎂','🍰','🧁','🎉','🎊','🎁','🎀','🌟','✨','🥳','👑'],
+  '加油': ['💪','👊','✊','👍','👍🏻','🔥','⭐','🌟','💫','🚀','💯','🏆','🥇','🎯','👏','🙌'],
+  '可爱': ['🥰','🥺','🥹','😊','🤗','🫶','💕','🌸','🌺','🌻','🌷','🦋','🐱','🐶','🐰','🧸','🌈','✨','💫','🤍','🩷'],
+  'cute': ['🥰','🥺','🥹','😊','🤗','🫶','💕','🌸','🦋','🐱','🐰','🧸','🌈','✨','💫','🩷','🩵','🤍','🌼','🌻'],
+  '亲亲': ['😘','😚','😙','💋','👄','💏','💑','😽','🥰','💕','💗','❤️','🩷','💋','🫦'],
+  '谢谢': ['🙏','🙏🏻','🤝','💐','🌸','🌷','🌹','❤️','💕','👍','👍🏻','🫶','✨','🌟','💫'],
+  'kiss': ['😘','😚','😙','💋','👄','💏','💑','😽','💕','💗','❤️','🩷','💋','🫦','😗'],
+  'hug': ['🤗','🫂','🫡','👐','🤲','🙌','💪','❤️','💕','🧸','🫶','🩷','🫂','🤗'],
+  'hello': ['👋','👋🏻','🤙','🖐️','✋','🖖','🫰','🫶','😊','🙂','👋','🙋','🙋🏻‍♀️','🙋🏻','👋🏻‍♂️','👋🏻‍♀️','👋🏼','👋🏽','👋🏾','👋🏿','🤗','🫂'],
+  'hi': ['👋','👋🏻','🤙','🖐️','✋','🖖','😊','🙂','🙋','🙋🏻','👋🏻‍♂️','👋🏻‍♀️','🤗','🫂'],
+  '笑': ['😀','😃','😄','😁','😆','😅','🤣','😂','😊','🙂','😸','😹','🤭','😏','🥴','🤪','😜','😝'],
+  '哭': ['😢','😭','😿','🥺','🥹','😥','😓','💔','🫠','😞','😔','🥲','☔','🌧️','💧','💦'],
+  '生气': ['😠','😡','🤬','😤','💢','🔥','😾','👊','👊🏻','💥','🤯','😣','😒','🙄','😑'],
+  '惊讶': ['😮','😲','🤯','😱','🙀','❗','❕','‼️','⁉️','❓','❔','🤯','😲','😮‍💨','🫢'],
+  '害怕': ['😨','😰','😱','🙀','🫣','😳','🫨','🫥','👻','💀','☠️','🕷️','🕸️','🦇','🌑','🌚'],
+  '酷': ['😎','🕶️','💪','🔥','👊','🤘','🤙','✌️','☮️','🤟','🏄','🛹','🛹','🛹','🛹'],
+  '好吃': ['😋','🤤','🍕','🍔','🍟','🌭','🍿','🧁','🍰','🎂','🍩','🍪','🍫','🍭','🍮','🍯','🥤','🧋','☕','🍵'],
+  '饿': ['🤤','😋','🍽️','🍴','🥘','🍲','🍜','🍝','🍛','🍣','🍱','🥟','🦐','🥩','🍗','🌮','🌯','🥪','🌭'],
+  '冷': ['🥶','❄️','🌨️','☃️','⛄','🧊','🧣','🧥','🔥','🌡️','🌬️','🫧','🥶','🥴','🥴'],
+  '热': ['🥵','🔥','☀️','🌡️','🌋','🏖️','🏜️','🥵','🫠','💦','🧊','🍦','🍧','🥤','🧋','🫗'],
+  '钱': ['💰','💵','💴','💶','💷','💸','💳','🧾','💹','🤑','💲','💱','🏧','💰','💎','👑'],
+  '棒': ['👍','👍🏻','👍🏼','👍🏽','👍🏾','👍🏿','👌','👌🏻','🙌','💪','🔥','⭐','🌟','✨','🏆','🥇','💯','🎯'],
+  '不好': ['👎','👎🏻','👎🏼','👎🏽','👎🏾','👎🏿','🙅','🙅🏻','🙅🏼','🙅🏽','🙅🏾','🙅🏿','🚫','⛔','❌','❎','🚷','🚯','🚱','📵','🔞','☠️','💀','😞','😔'],
+  'yes': ['✅','✔️','👍','👍🏻','👌','👌🏻','🙌','💪','🆗','👌','👍','✅','🆙','🆓','🆕','🆒','🎯','💯'],
+  'no': ['❌','❎','🚫','⛔','🙅','🙅🏻','👎','👎🏻','🚷','🚯','🚱','📵','🔞','☠️','💀','🚳','🚭','🚫'],
+  'ok': ['👌','👌🏻','👍','👍🏻','✅','✔️','🆗','🙌','💪','👌','👍','✅','🆙','🎯','💯'],
+  'good': ['👍','👍🏻','👌','👌🏻','✅','✔️','🆗','🙌','💪','🌟','⭐','✨','🔥','🎯','💯','🏆','🥇'],
+  'bad': ['👎','👎🏻','🙅','🙅🏻','❌','❎','🚫','⛔','😞','😔','💔','📉','📉','📉','📉','📉'],
+  '狗': ['🐶','🐕','🦮','🐕‍🦺','🐩','🐺','🦊','🦝','🐶','🐕','🐩','🐺','🦊'],
+  '猫': ['🐱','🐈','🐈‍⬛','🦁','🐯','🐅','🐆','🐴','🫏','🦓','🐮','🐂','🐃','🐱','🐈','🐈‍⬛'],
+  '花': ['🌸','🌺','🌻','🌼','🌷','🌹','🥀','🌺','🌸','💐','🌷','🌹','🌻','🌼','🌿','🍀','🍁','🍂','🍃','🌾','🌵','🎍','🎋','🎄','🌲','🌳'],
+  '太阳': ['☀️','🌞','🌤️','⛅','🌥️','☁️','🌦️','🌧️','⛈️','🌩️','❄️','🌨️','☃️','⛄','🌬️','🌀','🌪️','🌈','☂️','☔'],
+  '月亮': ['🌙','🌚','🌛','🌜','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙','⭐','🌟','💫','✨','🌌','🌠','🌌','☪️','🌍','🌎','🌏'],
+  '心': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🩷','🩵','🩶','🤎','💕','💞','💓','💗','💘','💝','💖','❣️','❤️‍🔥','❤️‍🩹','♥️','💋','💘','💝','❤️‍🩹','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💋','💌','🌹','🌷','💐'],
+  '星星': ['⭐','🌟','💫','✨','🌠','🌌','☪️','🔯','💫','✨','⭐','🌟','🌠','🌌','🌙','🌚','🌛','🌜','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙'],
+  'fire': ['🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥'],
+  'water': ['💧','💦','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊']
+};
+
+function getLocalStickers(query, limit) {
+  const q = query.toLowerCase();
+  let results = [];
+  
+  for (const [keywords, emojis] of Object.entries(localDb)) {
+    if (q.includes(keywords) || keywords.includes(q) || q === keywords) {
+      emojis.forEach(e => { results.push({ id: `local_${e}_${Math.random().toString(36).slice(2,7)}`, url: '', preview: '', description: e, isLocalEmoji: true, emojiChar: e, width: 64, height: 64 }); });
+    }
+  }
+  
+  if (results.length === 0) {
+    const fallback = ['😊','❤️','🥰','😘','🤗','💕','✨','🌟','🔥','💪','👍','🎉','🌈','🌸','🦋','🐱'];
+    results = fallback.slice(0, limit || 8).map(e => ({ id: `local_fb_${e}`, url: '', preview: '', description: e, isLocalEmoji: true, emojiChar: e, width: 64, height: 64 }));
+  }
+  
+  return results.slice(0, limit || 8);
+}
+
+app.get('/api/sticker/search', authMiddleware, async (req, res) => {
+  try {
+    const { q, page = '0', limit = '8' } = req.query;
+    const pageNum = Math.max(0, parseInt(page) || 0);
+    const limitNum = Math.min(20, Math.max(1, parseInt(limit) || 8));
+    if (!q || !q.trim()) return res.json({ stickers: [], next: false, page: 0 });
+    const query = q.trim().toLowerCase();
+    console.log(`[表情] 搜索: ${query}, 页${pageNum}, 限${limitNum}`);
+    const cacheKey = `${query}:${pageNum}:${limitNum}`;
+    const cached = getCachedStickers(cacheKey);
+    if (cached) return res.json(cached);
+    
+    let stickers = [], hasMore = false, source = 'local';
+    try {
+      let data = await tryFetchDoutula(query, limitNum, pageNum);
+      if (data.status === 1 && data.data?.list?.length > 0) {
+        stickers = data.data.list.slice(0, limitNum).map(item => ({
+          id: `doutula_${item.out_id}`, url: item.image_url, preview: item.image_url,
+          description: item.desc || '', isLocalEmoji: false, width: 0, height: 0
+        }));
+        hasMore = data.data.more === 1 && pageNum < 49;
+        source = 'doutula';
+      } else {
+        data = await tryFetchEmojiFamily(query, limitNum);
+        if (Array.isArray(data) && data.length > 0) {
+          stickers = data.slice(0, limitNum).map(item => ({
+            id: `emojifamily_${item.hexcode || item.emoji}`,
+            url: `https://www.emoji.family/api/emojis/${encodeURIComponent(item.emoji)}/noto/png/128`,
+            preview: `https://www.emoji.family/api/emojis/${encodeURIComponent(item.emoji)}/noto/png/72`,
+            description: item.annotation || item.emoji || '', isLocalEmoji: true, emojiChar: item.emoji, width: 128, height: 128
+          }));
+          hasMore = data.length > limitNum;
+          source = 'emoji-family';
+        }
+      }
+      if (stickers.length === 0) {
+        if (typeof getLocalStickers === 'function') stickers = getLocalStickers(query, limitNum);
+        source = 'local-fallback';
+      }
+    } catch (error) {
+      console.error(`[表情] API失败: ${error.message}`);
+      if (typeof getLocalStickers === 'function') stickers = getLocalStickers(query, limitNum);
+      source = 'local-fallback';
+    }
+    const result = { stickers, next: hasMore, page: pageNum, source };
+    setCachedStickers(cacheKey, result);
+    return res.json(result);
+  } catch (error) {
+    console.error('[表情] 异常:', error.message);
+    const query = (req.query.q || '').trim().toLowerCase();
+    const limitNum = Math.min(20, Math.max(1, parseInt(req.query.limit) || 8));
+    const localStickers = typeof getLocalStickers === 'function' ? getLocalStickers(query, limitNum) : [];
+    return res.json({ stickers: localStickers, next: false, page: 0, source: 'local-fallback' });
+  }
+});
+
+// 静态文件服务中间件（放在 sticker API 之后避免拦截）
+app.use(express.static(path.join(__dirname, 'public'), { dotfiles: 'deny' }));
 
 // ---------- 认证相关路由 ----------
 

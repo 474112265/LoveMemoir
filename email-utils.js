@@ -19,11 +19,13 @@ const SMTP_CONFIG = {
 
 const REMINDER_COOLDOWN = 3 * 60 * 1000;
 const REMINDER_DELAY = 1 * 60 * 1000;
+const TEST_MODE = process.env.EMAIL_TEST_MODE === 'true';
 
 const emailLog = [];
 const MAX_LOG_ENTRIES = 200;
 
 const lastReminderSent = {};
+const reminderWindowTracker = {};
 
 let transporter = null;
 
@@ -79,7 +81,15 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function getEmailTemplate(senderName) {
+function getEmailTemplate(senderName, unreadCount = 1) {
+  const messageText = unreadCount > 1 
+    ? `宝宝，你还有${unreadCount}条消息没有回复我呢！` 
+    : '宝宝，你还有新的消息没有回复我呢！';
+  
+  const detailText = unreadCount > 1 
+    ? `你的另一半给你发了${unreadCount}条消息，正在等你回复哦～快去看看吧！💌`
+    : '你的另一半正在等你回复哦～快去看看吧！💌';
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -101,9 +111,9 @@ function getEmailTemplate(senderName) {
 <tr><td style="padding:32px 28px;">
 <div style="background:#fdf2f8;border-radius:12px;padding:20px;margin-bottom:24px;border-left:4px solid #f472b6;">
 <p style="margin:0 0 8px;font-size:14px;color:#9d174d;font-weight:500;">${senderName} 给你发了新消息</p>
-<p style="margin:0;font-size:18px;color:#be185d;font-weight:600;line-height:1.6;">宝宝，你还有新的消息没有回复我呢！</p>
+<p style="margin:0;font-size:18px;color:#be185d;font-weight:600;line-height:1.6;">${messageText}</p>
 </div>
-<p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.8;">你的另一半正在等你回复哦～快去看看吧！💌</p>
+<p style="margin:0 0 24px;font-size:14px;color:#6b7280;line-height:1.8;">${detailText}</p>
 <table width="100%" cellpadding="0" cellspacing="0">
 <tr><td align="center">
 <a href="http://106.52.180.78:520/" style="display:inline-block;background:linear-gradient(135deg,#ec4899,#f472b6);color:#ffffff;text-decoration:none;padding:14px 40px;border-radius:50px;font-size:16px;font-weight:600;letter-spacing:0.5px;box-shadow:0 4px 12px rgba(236,72,153,0.3);">💕 去回复Ta</a>
@@ -149,7 +159,7 @@ function getUserEmail(userId) {
   return decryptEmail(user.email_encrypted, user.email_iv);
 }
 
-async function sendReminderEmail(toEmail, senderName) {
+async function sendReminderEmail(toEmail, senderName, unreadCount = 1) {
   const cooldownKey = `${toEmail}_${senderName}`;
   const now = Date.now();
 
@@ -159,16 +169,25 @@ async function sendReminderEmail(toEmail, senderName) {
   }
 
   try {
+    if (TEST_MODE) {
+      const mockMessageId = `TEST-${Date.now()}-${Math.random().toString(36).substr(2, 9)}@mock`;
+      lastReminderSent[cooldownKey] = now;
+      addLog('success', '[测试模式] 提醒邮件发送成功（模拟）', `收件人: ${toEmail.substring(0, 3)}***, 发送者: ${senderName}, 未读数: ${unreadCount}, messageId: ${mockMessageId}`);
+      return { success: true, messageId: mockMessageId, testMode: true };
+    }
+
     const transport = getTransporter();
     const info = await transport.sendMail({
       from: '"💕 恋爱记事簿" <474112265@qq.com>',
       to: toEmail,
-      subject: '💕 宝宝，你有新的消息未回复哦～',
-      html: getEmailTemplate(senderName)
+      subject: unreadCount > 1 
+        ? `💕 宝宝，你有${unreadCount}条新消息未回复哦～` 
+        : '💕 宝宝，你有新的消息未回复哦～',
+      html: getEmailTemplate(senderName, unreadCount)
     });
 
     lastReminderSent[cooldownKey] = now;
-    addLog('success', '提醒邮件发送成功', `收件人: ${toEmail.substring(0, 3)}***, 发送者: ${senderName}, messageId: ${info.messageId}`);
+    addLog('success', '提醒邮件发送成功', `收件人: ${toEmail.substring(0, 3)}***, 发送者: ${senderName}, 未读数: ${unreadCount}, messageId: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (err) {
     addLog('error', '提醒邮件发送失败', err.message);
@@ -178,7 +197,7 @@ async function sendReminderEmail(toEmail, senderName) {
 
 function checkUnreadReminders() {
   const db = getDb();
-  const threeMinAgo = new Date(Date.now() - REMINDER_DELAY).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '').replace(/Z$/, '');
+  const delayThreshold = new Date(Date.now() - REMINDER_DELAY).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '').replace(/Z$/, '');
 
   const unreadMessages = db.prepare(
     `SELECT m.id, m.sender, m.created_at, m.is_read,
@@ -189,7 +208,7 @@ function checkUnreadReminders() {
        AND m.created_at <= ?
        AND u.display_name != m.sender
      ORDER BY m.created_at ASC`
-  ).all(threeMinAgo);
+  ).all(delayThreshold);
 
   if (unreadMessages.length === 0) return;
 
@@ -201,8 +220,15 @@ function checkUnreadReminders() {
         receiverId: msg.receiver_id,
         receiverName: msg.receiver_name,
         senderName: msg.sender,
-        earliestTime: msg.created_at
+        messageIds: [msg.id],
+        earliestTime: msg.created_at,
+        latestTime: msg.created_at,
+        count: 1
       };
+    } else {
+      reminderMap[key].messageIds.push(msg.id);
+      reminderMap[key].latestTime = msg.created_at;
+      reminderMap[key].count++;
     }
   });
 
@@ -211,12 +237,28 @@ function checkUnreadReminders() {
     if (!email) return;
 
     const stillUnread = db.prepare(
-      `SELECT COUNT(*) as count FROM messages WHERE is_read = 0 AND sender = ?`
+      `SELECT COUNT(*) as count, MAX(created_at) as latest_time 
+       FROM messages 
+       WHERE is_read = 0 AND sender = ?`
     ).get(reminder.senderName);
 
     if (stillUnread.count === 0) return;
 
-    await sendReminderEmail(email, reminder.senderName);
+    const trackerKey = `${email}_${reminder.senderName}`;
+    const lastTrackedTime = reminderWindowTracker[trackerKey];
+
+    const currentTime = new Date(reminder.latestTime).getTime();
+    const lastTrackedTimestamp = lastTrackedTime ? new Date(lastTrackedTime).getTime() : 0;
+
+    if (lastTrackedTime && currentTime <= lastTrackedTimestamp) {
+      addLog('info', '时间窗口内，跳过提醒', `发送者: ${reminder.senderName}, 上次追踪时间: ${lastTrackedTime}, 当前最新: ${reminder.latestTime}`);
+      return;
+    }
+
+    await sendReminderEmail(email, reminder.senderName, stillUnread.count);
+
+    reminderWindowTracker[trackerKey] = reminder.latestTime;
+    addLog('info', '更新时间窗口追踪', `发送者: ${reminder.senderName}, 追踪至: ${reminder.latestTime}`);
   });
 }
 

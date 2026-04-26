@@ -498,6 +498,368 @@
       });
       grid.appendChild(item);
     });
+
+    initStickerSearch();
+  }
+
+  // ==================== 表情包搜索功能 ====================
+
+  let stickerSearchTimer = null;
+  let stickerSearchPage = 0;
+  let stickerSearchQuery = '';
+  let stickerHasMore = false;
+  let stickerIsLoading = false;
+  let stickerAbortController = null;
+  const stickerImgCache = new Map();
+
+  function initStickerSearch() {
+    const tabs = document.querySelectorAll('.emoji-tab');
+    const searchInput = $('#emojiSearchInput');
+    const clearBtn = $('#emojiSearchClear');
+    const moreBtn = $('#emojiSearchMoreBtn');
+
+    if (!searchInput || !clearBtn || !moreBtn) return;
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const target = tab.dataset.tab;
+        if (target === 'emoji') {
+          $('#emojiPanelEmoji').style.display = '';
+          $('#emojiPanelSearch').style.display = 'none';
+        } else {
+          $('#emojiPanelEmoji').style.display = 'none';
+          $('#emojiPanelSearch').style.display = 'flex';
+          setTimeout(() => searchInput?.focus(), 100);
+          if (!stickerSearchQuery) loadDefaultSuggestions();
+        }
+      });
+    });
+
+    searchInput.addEventListener('input', () => {
+      const val = searchInput.value.trim();
+      clearBtn.style.display = val ? 'flex' : 'none';
+
+      if (stickerSearchTimer) clearTimeout(stickerSearchTimer);
+
+      if (!val) {
+        loadDefaultSuggestions();
+        resetStickerResults();
+        return;
+      }
+
+      stickerSearchTimer = setTimeout(() => {
+        performStickerSearch(val, 0);
+      }, 400);
+    });
+
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      clearBtn.style.display = 'none';
+      stickerSearchQuery = '';
+      loadDefaultSuggestions();
+      resetStickerResults();
+      searchInput.focus();
+    });
+
+    moreBtn.addEventListener('click', () => {
+      if (stickerHasMore && !stickerIsLoading) {
+        performStickerSearch(stickerSearchQuery, stickerSearchPage + 1);
+      }
+    });
+  }
+
+  async function loadDefaultSuggestions() {
+    try {
+      const res = await safeFetch(`${API_BASE}/api/sticker/suggestions`);
+      if (res.ok) {
+        const data = await res.json();
+        renderSuggestions(data.suggestions || []);
+      }
+    } catch (e) {}
+  }
+
+  async function loadSearchSuggestions(query) {
+    try {
+      const res = await safeFetch(`${API_BASE}/api/sticker/suggestions?q=${encodeURIComponent(query)}`);
+      if (res.ok) {
+        const data = await res.json();
+        renderSuggestions(data.suggestions || []);
+      }
+    } catch (e) {}
+  }
+
+  function renderSuggestions(suggestions) {
+    const container = $('#emojiSearchSuggestions');
+    if (!container) return;
+    if (!suggestions || suggestions.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+    container.innerHTML = suggestions.map(s =>
+      `<span class="emoji-suggestion-tag" data-query="${escapeHtml(s)}">${escapeHtml(s)}</span>`
+    ).join('');
+    container.style.display = 'flex';
+
+    container.querySelectorAll('.emoji-suggestion-tag').forEach(tag => {
+      tag.addEventListener('click', () => {
+        const query = tag.dataset.query;
+        const input = $('#emojiSearchInput');
+        input.value = query;
+        $('#emojiSearchClear').style.display = 'flex';
+        performStickerSearch(query, 0);
+      });
+    });
+  }
+
+  function resetStickerResults() {
+    const results = $('#emojiSearchResults');
+    if (!results) return;
+    results.innerHTML = `
+      <div class="emoji-search-empty">
+        <div class="emoji-search-empty-icon">🔍</div>
+        <div class="emoji-search-empty-text">输入关键词搜索表情包</div>
+        <div class="emoji-search-empty-hint">如：开心、爱你、晚安、hello</div>
+      </div>
+    `;
+    const more = $('#emojiSearchMore');
+    if (more) more.style.display = 'none';
+  }
+
+  async function performStickerSearch(query, page) {
+    if (stickerIsLoading && page === 0) return;
+
+    if (stickerAbortController) {
+      stickerAbortController.abort();
+    }
+
+    stickerIsLoading = true;
+    stickerSearchQuery = query;
+    stickerAbortController = new AbortController();
+
+    const loading = $('#emojiSearchLoading');
+    const moreBtn = $('#emojiSearchMoreBtn');
+
+    if (page === 0) {
+      loading.style.display = 'flex';
+      const results = $('#emojiSearchResults');
+      if (results) results.innerHTML = '';
+    }
+    if (moreBtn) moreBtn.disabled = true;
+
+    try {
+      const res = await safeFetch(
+        `${API_BASE}/api/sticker/search?q=${encodeURIComponent(query)}&page=${page}&limit=8`
+      );
+      if (!res.ok) throw new Error('搜索请求失败');
+
+      const data = await res.json();
+      stickerSearchPage = data.page || page;
+      stickerHasMore = data.next;
+
+      loadSearchSuggestions(query);
+      renderStickerResults(data.stickers || [], page === 0);
+
+      if (stickerHasMore) {
+        const more = $('#emojiSearchMore');
+        if (more) more.style.display = 'block';
+        if (moreBtn) moreBtn.disabled = false;
+      } else {
+        const more = $('#emojiSearchMore');
+        if (more) more.style.display = 'none';
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.error('表情包搜索失败:', err);
+      if (page === 0) {
+        const results = $('#emojiSearchResults');
+        if (results) {
+          results.innerHTML = `
+            <div class="emoji-search-no-result">
+              <div class="emoji-search-no-result-icon">😕</div>
+              <div class="emoji-search-no-result-text">搜索失败，请稍后重试</div>
+            </div>
+          `;
+        }
+      }
+    } finally {
+      if (loading) loading.style.display = 'none';
+      stickerIsLoading = false;
+      stickerAbortController = null;
+    }
+  }
+
+  function renderStickerResults(stickers, isNewSearch) {
+    const results = $('#emojiSearchResults');
+    if (!results) return;
+
+    if (isNewSearch) {
+      results.innerHTML = '';
+    }
+
+    if ((!stickers || stickers.length === 0) && isNewSearch) {
+      results.innerHTML = `
+        <div class="emoji-search-no-result">
+          <div class="emoji-search-no-result-icon">🔍</div>
+          <div class="emoji-search-no-result-text">没有找到相关表情包</div>
+        </div>
+      `;
+      return;
+    }
+
+    let grid = results.querySelector('.emoji-sticker-grid');
+    if (!grid) {
+      grid = document.createElement('div');
+      grid.className = 'emoji-sticker-grid';
+      results.appendChild(grid);
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    stickers.forEach(sticker => {
+      const item = document.createElement('div');
+      item.className = 'emoji-sticker-item';
+      item.dataset.stickerUrl = sticker.url;
+      item.dataset.stickerId = sticker.id;
+
+      if (sticker.isLocalEmoji && sticker.emojiChar) {
+        item.classList.add('emoji-sticker-local');
+        const emojiEl = document.createElement('span');
+        emojiEl.className = 'sticker-emoji-char';
+        emojiEl.textContent = sticker.emojiChar;
+        emojiEl.style.fontSize = '42px';
+        emojiEl.style.lineHeight = '1';
+        emojiEl.style.display = 'flex';
+        emojiEl.style.alignItems = 'center';
+        emojiEl.style.justifyContent = 'center';
+        emojiEl.style.width = '100%';
+        emojiEl.style.height = '100%';
+        item.appendChild(emojiEl);
+      } else {
+        const img = document.createElement('img');
+        img.alt = sticker.description || '';
+        img.loading = 'lazy';
+        img.decoding = 'async';
+
+        const placeholder = document.createElement('div');
+        placeholder.className = 'sticker-placeholder';
+        placeholder.innerHTML = '<div class="sticker-placeholder-spinner"></div>';
+        item.appendChild(placeholder);
+
+        img.onload = () => {
+          if (placeholder.parentNode === item) {
+            item.replaceChild(img, placeholder);
+          }
+        };
+        img.onerror = () => {
+          placeholder.innerHTML = '<span class="sticker-error-icon">✕</span>';
+          placeholder.classList.add('sticker-load-error');
+        };
+        img.src = sticker.preview;
+      }
+
+      item.addEventListener('click', () => {
+        insertSticker(sticker.url, sticker.id, sticker.isLocalEmoji, sticker.emojiChar);
+      });
+
+      fragment.appendChild(item);
+    });
+
+    grid.appendChild(fragment);
+  }
+
+  async function insertSticker(stickerUrl, stickerId, isLocalEmoji, emojiChar) {
+    try {
+      showToast('正在发送表情包...', 'info');
+
+      if (isLocalEmoji && emojiChar) {
+        const messageRes = await safeFetch(`${API_BASE}/api/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: emojiChar,
+            sender: selectedSender,
+            message_type: 'text'
+          })
+        });
+
+        if (!messageRes.ok) {
+          const errData = await messageRes.json().catch(() => ({}));
+          throw new Error(errData.error || '发送失败');
+        }
+
+        const msgData = await messageRes.json();
+        if (msgData.message) {
+          messagesCache.push(msgData.message);
+          renderMessages(messagesCache);
+          scrollToBottom(true);
+          showToast('✅ 表情已发送', 'success');
+        }
+        return;
+      }
+
+      let blob;
+      if (stickerImgCache.has(stickerId)) {
+        blob = stickerImgCache.get(stickerId);
+      } else {
+        const response = await fetch(stickerUrl);
+        if (!response.ok) throw new Error('下载表情包失败');
+        blob = await response.blob();
+        if (stickerImgCache.size < 20) {
+          stickerImgCache.set(stickerId, blob);
+        }
+      }
+
+      const ext = stickerUrl.includes('.gif') ? 'gif' : 'png';
+      const filename = `sticker_${Date.now()}.${ext}`;
+      const file = new File([blob], filename, { type: blob.type || 'image/gif' });
+
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const uploadRes = await safeFetch(`${API_BASE}/api/upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!uploadRes.ok) {
+        const errData = await uploadRes.json().catch(() => ({}));
+        throw new Error(errData.error || '上传失败');
+      }
+
+      const uploadData = await uploadRes.json();
+
+      const messageRes = await safeFetch(`${API_BASE}/api/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: '',
+          sender: selectedSender,
+          message_type: 'image',
+          image_url: uploadData.url
+        })
+      });
+
+      if (!messageRes.ok) {
+        const errData = await messageRes.json().catch(() => ({}));
+        throw new Error(errData.error || '发送失败');
+      }
+
+      const msgData = await messageRes.json();
+      if (msgData.message) {
+        messagesCache.push(msgData.message);
+        renderMessages(messagesCache);
+        scrollToBottom(true);
+      }
+
+      $('#emojiPicker').style.display = 'none';
+      showToast('表情包发送成功 💕', 'success');
+
+    } catch (err) {
+      console.error('发送表情包失败:', err);
+      showToast('发送表情包失败: ' + err.message, 'error');
+    }
   }
 
   // ==================== 事件绑定 ====================
@@ -1051,6 +1413,8 @@
    * @returns {void}
    */
   function showLogin() {
+    const pageLoading = $('#pageLoading');
+    if (pageLoading) pageLoading.classList.add('hidden');
     $('#loginOverlay').style.display = 'flex';
     $('#app').style.display = 'none';
     $('#loginError').textContent = '';
@@ -1072,8 +1436,14 @@
    * @returns {void}
    */
   function showApp() {
+    const pageLoading = $('#pageLoading');
+    const app = $('#app');
     $('#loginOverlay').style.display = 'none';
-    $('#app').style.display = 'flex';
+    app.style.display = 'flex';
+    requestAnimationFrame(() => {
+      app.classList.add('visible');
+      if (pageLoading) pageLoading.classList.add('hidden');
+    });
     if (currentUser) {
       $('#currentUser').textContent = currentUser.displayName;
       selectedSender = currentUser.displayName;
@@ -1145,7 +1515,7 @@
    * 
    * 渲染规则：
    * - 消息按日期分组，日期变更处插入日期分隔线
-   * - 不同发送者的消息使用不同的CSS样式类（xiaozhong/xiaocai）
+   * - 不同发送者的消息使用不同的CSS样式类（xiaoyang/xiaocai）
    * - 未读消息添加高亮样式类
    * - 图片类型消息渲染为img标签，支持点击放大查看
    * - 已编辑消息显示"(已编辑)"标记
@@ -1182,7 +1552,7 @@
       }
 
       const isUnread = !msg.is_read;
-      const senderClass = msg.sender === '小洋' ? 'sender-xiaozhong' : 'sender-xiaocai';
+      const senderClass = msg.sender === '小洋' ? 'sender-xiaoyang' : 'sender-xiaocai';
       const unreadClass = isUnread ? ' unread-message' : '';
       const senderAvatar = msg.sender === '小洋'
         ? '<img class="message-avatar" src="/images/xiaoyang-avatar.png" alt="小洋">'
@@ -1747,7 +2117,7 @@
       }
 
       const isUnread = !msg.is_read;
-      const senderClass = msg.sender === '小洋' ? 'sender-xiaozhong' : 'sender-xiaocai';
+      const senderClass = msg.sender === '小洋' ? 'sender-xiaoyang' : 'sender-xiaocai';
       const unreadClass = isUnread ? ' unread-message' : '';
       const senderAvatar = msg.sender === '小洋'
         ? '<img class="message-avatar" src="/images/xiaoyang-avatar.png" alt="小洋">'
@@ -2240,6 +2610,7 @@
       $('#albumViewLoading').style.display = 'none';
       const viewVideo = $('#albumViewVideo');
       if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
+      resetVideoDownloadState();
     });
     $('#albumViewOverlay').addEventListener('click', (e) => {
       if (e.target === $('#albumViewOverlay')) {
@@ -2248,8 +2619,12 @@
         $('#albumViewLoading').style.display = 'none';
         const viewVideo = $('#albumViewVideo');
         if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
+        resetVideoDownloadState();
       }
     });
+
+    // 视频下载按钮点击事件
+    $('#albumVideoDownloadBtn').addEventListener('click', handleVideoDownload);
   }
 
   // ==================== 邮箱设置 ====================
@@ -2716,6 +3091,150 @@
    *   url（原图URL）, thumbnail_url（缩略图URL）
    * @returns {void}
    */
+
+  // ==================== 视频下载功能 ====================
+  
+  let currentVideoUrl = null;
+  let currentVideoFilename = null;
+  let isDownloading = false;
+  let downloadAbortController = null;
+
+  function showVideoDownloadButton(url, filename) {
+    const btn = $('#albumVideoDownloadBtn');
+    if (!btn) return;
+    currentVideoUrl = url;
+    currentVideoFilename = filename;
+    btn.style.display = 'flex';
+    btn.classList.remove('downloading');
+    hideDownloadStatus();
+  }
+
+  function hideVideoDownloadButton() {
+    const btn = $('#albumVideoDownloadBtn');
+    if (btn) btn.style.display = 'none';
+    currentVideoUrl = null;
+    currentVideoFilename = null;
+    hideDownloadStatus();
+  }
+
+  function resetVideoDownloadState() {
+    hideVideoDownloadButton();
+    isDownloading = false;
+    if (downloadAbortController) {
+      downloadAbortController.abort();
+      downloadAbortController = null;
+    }
+  }
+
+  function showDownloadStatus(status, text, progress) {
+    const statusEl = $('#albumDownloadStatus');
+    if (!statusEl) return;
+    
+    statusEl.className = 'video-download-status';
+    if (status === 'success') statusEl.classList.add('success');
+    if (status === 'error') statusEl.classList.add('error');
+    
+    const textEl = statusEl.querySelector('.download-status-text');
+    const progressFill = statusEl.querySelector('.download-progress-fill');
+    const spinner = statusEl.querySelector('.download-spinner');
+    
+    if (textEl) textEl.textContent = text || '下载中...';
+    if (progressFill) progressFill.style.width = (progress || 0) + '%';
+    if (spinner) spinner.style.display = (status === 'downloading') ? 'block' : 'none';
+    
+    statusEl.style.display = 'block';
+    
+    if (status === 'success' || status === 'error') {
+      setTimeout(() => {
+        statusEl.style.display = 'none';
+      }, 2500);
+    }
+  }
+
+  function hideDownloadStatus() {
+    const statusEl = $('#albumDownloadStatus');
+    if (statusEl) statusEl.style.display = 'none';
+  }
+
+  async function handleVideoDownload() {
+    if (!currentVideoUrl || isDownloading) return;
+    
+    const btn = $('#albumVideoDownloadBtn');
+    if (!btn) return;
+    
+    isDownloading = true;
+    btn.classList.add('downloading');
+    downloadAbortController = new AbortController();
+    
+    showDownloadStatus('downloading', '准备下载...', 0);
+    
+    try {
+      const response = await fetch(currentVideoUrl, {
+        signal: downloadAbortController.signal
+      });
+      
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      
+      const contentLength = response.headers.get('content-length');
+      const total = parseInt(contentLength) || 0;
+      let loaded = 0;
+      
+      const reader = response.body.getReader();
+      const chunks = [];
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        chunks.push(value);
+        loaded += value.length;
+        
+        if (total > 0) {
+          const progress = Math.round((loaded / total) * 100);
+          showDownloadStatus('downloading', `下载中 ${formatFileSize(loaded)} / ${formatFileSize(total)}`, progress);
+        } else {
+          showDownloadStatus('downloading', `下载中 ${formatFileSize(loaded)}...`, Math.min(loaded / (1024 * 1024) * 10, 95));
+        }
+      }
+      
+      const blob = new Blob(chunks, { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = currentVideoFilename || 'video.mp4';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      
+      showDownloadStatus('success', '✓ 下载完成', 100);
+      showToast('视频下载成功', 'success');
+      
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        showDownloadStatus('error', '下载已取消', 0);
+      } else {
+        console.error('视频下载失败:', err);
+        showDownloadStatus('error', '✗ 下载失败', 0);
+        showToast('视频下载失败: ' + err.message, 'error');
+      }
+    } finally {
+      isDownloading = false;
+      btn.classList.remove('downloading');
+      downloadAbortController = null;
+    }
+  }
+
+  function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
   function renderAlbumPhotos(photos) {
     const grid = $('#albumGrid');
     const countEl = $('#albumCount');
@@ -2868,11 +3387,15 @@
           viewVideo.onerror = () => {
             loadingEl.style.display = 'none';
             hideBuffering();
-            showToast('视频加载失败', 'error');
+            // showToast('视频加载失败', 'error');
           };
 
           viewVideo.src = originalUrl;
           viewVideo.load();
+          
+          const photoIndex = parseInt(card.dataset.index);
+          const currentPhoto = albumPhotosCache[photoIndex];
+          showVideoDownloadButton(originalUrl, currentPhoto?.original_name || 'video.mp4');
           $('#albumViewOverlay').style.display = 'flex';
         } else {
           let viewVideo = $('#albumViewVideo');
@@ -2891,6 +3414,7 @@
             viewImg.style.opacity = '1';
           };
           viewImg.src = originalUrl;
+          hideVideoDownloadButton();
           $('#albumViewOverlay').style.display = 'flex';
         }
       });

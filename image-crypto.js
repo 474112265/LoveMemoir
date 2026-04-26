@@ -222,14 +222,31 @@ function streamDecryptedFile(filePath, res, contentType) {
  */
 function streamDecryptedFileWithRange(filePath, res, req, contentType) {
   try {
-    const buffer = fs.readFileSync(filePath);
-    const decrypted = decryptBuffer(buffer);
-    const fileSize = decrypted.length;
+    const stats = fs.statSync(filePath);
+    const encryptedSize = stats.size;
+    const decryptedSize = encryptedSize - IV_LENGTH;
+
+    if (decryptedSize <= 0) {
+      res.status(500).send('Invalid encrypted file');
+      return false;
+    }
 
     const rangeHeader = req.headers.range;
+
     if (!rangeHeader) {
+      const fd = fs.openSync(filePath, 'r');
+      const iv = Buffer.alloc(IV_LENGTH);
+      fs.readSync(fd, iv, 0, IV_LENGTH, 0);
+
+      const encryptedData = Buffer.alloc(decryptedSize);
+      fs.readSync(fd, encryptedData, 0, decryptedSize, IV_LENGTH);
+      fs.closeSync(fd);
+
+      const decipher = crypto.createDecipheriv(ALGORITHM, KEY, iv);
+      const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Content-Length', decrypted.length);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Cache-Control', 'private, no-store');
       res.end(decrypted);
@@ -237,25 +254,52 @@ function streamDecryptedFileWithRange(filePath, res, req, contentType) {
     }
 
     const parts = rangeHeader.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10) || 0;
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunkSize = end - start + 1;
+    let start = parseInt(parts[0], 10) || 0;
+    let end = parts[1] ? parseInt(parts[1], 10) : decryptedSize - 1;
 
-    if (start >= fileSize) {
+    if (start >= decryptedSize) {
       res.writeHead(416, {
-        'Content-Range': `bytes */${fileSize}`,
+        'Content-Range': `bytes */${decryptedSize}`,
         'Content-Type': contentType
       });
       res.end();
       return true;
     }
 
-    const chunk = decrypted.subarray(start, end + 1);
+    if (end >= decryptedSize) end = decryptedSize - 1;
+
+    const BLOCK_SIZE = 16;
+    const blockStart = Math.floor(start / BLOCK_SIZE) * BLOCK_SIZE;
+    const blockEnd = Math.min(Math.ceil((end + 1) / BLOCK_SIZE) * BLOCK_SIZE, decryptedSize) - 1;
+    const blockReadLen = blockEnd - blockStart + 1;
+
+    const fd = fs.openSync(filePath, 'r');
+    const fileIv = Buffer.alloc(IV_LENGTH);
+    fs.readSync(fd, fileIv, 0, IV_LENGTH, 0);
+
+    let ivForBlock;
+    if (blockStart === 0) {
+      ivForBlock = fileIv;
+    } else {
+      ivForBlock = Buffer.alloc(IV_LENGTH);
+      fs.readSync(fd, ivForBlock, 0, IV_LENGTH, IV_LENGTH + blockStart - BLOCK_SIZE);
+    }
+
+    const encryptedChunk = Buffer.alloc(blockReadLen);
+    fs.readSync(fd, encryptedChunk, 0, blockReadLen, IV_LENGTH + blockStart);
+    fs.closeSync(fd);
+
+    const decipher = crypto.createDecipheriv(ALGORITHM, KEY, ivForBlock);
+    decipher.setAutoPadding(false);
+    const decryptedBlock = Buffer.concat([decipher.update(encryptedChunk), decipher.final()]);
+
+    const offsetInBlock = start - blockStart;
+    const chunk = decryptedBlock.subarray(offsetInBlock, offsetInBlock + (end - start + 1));
 
     res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Content-Range': `bytes ${start}-${end}/${decryptedSize}`,
       'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
+      'Content-Length': chunk.length,
       'Content-Type': contentType,
       'Cache-Control': 'private, no-store'
     });
