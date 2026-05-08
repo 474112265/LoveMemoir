@@ -33,6 +33,8 @@
   /** 消息本地缓存数组，避免重复请求服务器数据 */
   let messagesCache = [];
 
+  let sendingMessageIds = new Set();
+
   /** 上次检查已读状态的ISO时间字符串，用于增量查询已读变化 */
   let lastReadCheckTime = '';
 
@@ -80,6 +82,12 @@
 
   /** 图片签名令牌过期时间戳 */
   let imageTokenExpiresAt = 0;
+
+  /** 自定义表情缓存数组 */
+  let customEmojisCache = [];
+
+  /** 当前激活的表情标签页 */
+  let activeEmojiTab = 'default';
 
   // ==================== 工具函数 ====================
 
@@ -324,6 +332,7 @@
   function init() {
     initHeartCanvas();
     initEmojiPicker();
+    initCustomEmojiModule();
     bindEvents();
     initScrollDetection();
     initAlbum();
@@ -498,371 +507,388 @@
       });
       grid.appendChild(item);
     });
-
-    initStickerSearch();
   }
 
-  // ==================== 表情包搜索功能 ====================
+  // ==================== 自定义表情模块 ====================
 
-  let stickerSearchTimer = null;
-  let stickerSearchPage = 0;
-  let stickerSearchQuery = '';
-  let stickerHasMore = false;
-  let stickerIsLoading = false;
-  let stickerAbortController = null;
-  const stickerImgCache = new Map();
-
-  function initStickerSearch() {
-    const tabs = document.querySelectorAll('.emoji-tab');
-    const searchInput = $('#emojiSearchInput');
-    const clearBtn = $('#emojiSearchClear');
-    const moreBtn = $('#emojiSearchMoreBtn');
-
-    if (!searchInput || !clearBtn || !moreBtn) return;
-
+  /**
+   * 初始化自定义表情模块
+   * 
+   * 绑定标签页切换、上传按钮、收藏功能等事件
+   */
+  function initCustomEmojiModule() {
+    const tabs = $$('.emoji-tab');
     tabs.forEach(tab => {
       tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        const target = tab.dataset.tab;
-        if (target === 'emoji') {
-          $('#emojiPanelEmoji').style.display = '';
-          $('#emojiPanelSearch').style.display = 'none';
-        } else {
-          $('#emojiPanelEmoji').style.display = 'none';
-          $('#emojiPanelSearch').style.display = 'flex';
-          setTimeout(() => searchInput?.focus(), 100);
-          if (!stickerSearchQuery) loadDefaultSuggestions();
-        }
+        const tabName = tab.dataset.tab;
+        switchEmojiTab(tabName);
       });
     });
 
-    searchInput.addEventListener('input', () => {
-      const val = searchInput.value.trim();
-      clearBtn.style.display = val ? 'flex' : 'none';
-
-      if (stickerSearchTimer) clearTimeout(stickerSearchTimer);
-
-      if (!val) {
-        loadDefaultSuggestions();
-        resetStickerResults();
-        return;
-      }
-
-      stickerSearchTimer = setTimeout(() => {
-        performStickerSearch(val, 0);
-      }, 400);
-    });
-
-    clearBtn.addEventListener('click', () => {
-      searchInput.value = '';
-      clearBtn.style.display = 'none';
-      stickerSearchQuery = '';
-      loadDefaultSuggestions();
-      resetStickerResults();
-      searchInput.focus();
-    });
-
-    moreBtn.addEventListener('click', () => {
-      if (stickerHasMore && !stickerIsLoading) {
-        performStickerSearch(stickerSearchQuery, stickerSearchPage + 1);
-      }
-    });
-  }
-
-  async function loadDefaultSuggestions() {
-    try {
-      const res = await safeFetch(`${API_BASE}/api/sticker/suggestions`);
-      if (res.ok) {
-        const data = await res.json();
-        renderSuggestions(data.suggestions || []);
-      }
-    } catch (e) {}
-  }
-
-  async function loadSearchSuggestions(query) {
-    try {
-      const res = await safeFetch(`${API_BASE}/api/sticker/suggestions?q=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const data = await res.json();
-        renderSuggestions(data.suggestions || []);
-      }
-    } catch (e) {}
-  }
-
-  function renderSuggestions(suggestions) {
-    const container = $('#emojiSearchSuggestions');
-    if (!container) return;
-    if (!suggestions || suggestions.length === 0) {
-      container.style.display = 'none';
-      return;
+    const uploadInput = $('#customEmojiInput');
+    if (uploadInput) {
+      uploadInput.addEventListener('change', handleCustomEmojiUpload);
     }
-    container.innerHTML = suggestions.map(s =>
-      `<span class="emoji-suggestion-tag" data-query="${escapeHtml(s)}">${escapeHtml(s)}</span>`
-    ).join('');
-    container.style.display = 'flex';
+  }
 
-    container.querySelectorAll('.emoji-suggestion-tag').forEach(tag => {
-      tag.addEventListener('click', () => {
-        const query = tag.dataset.query;
-        const input = $('#emojiSearchInput');
-        input.value = query;
-        $('#emojiSearchClear').style.display = 'flex';
-        performStickerSearch(query, 0);
+  /**
+   * 切换表情选择器的标签页
+   * @param {string} tabName - 标签页名称 ('default' | 'custom')
+   */
+  function switchEmojiTab(tabName) {
+    activeEmojiTab = tabName;
+    
+    $$('.emoji-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+
+    $$('.emoji-tab-content').forEach(content => {
+      content.style.display = content.id === `tab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}` ? 'block' : 'none';
+    });
+
+    if (tabName === 'custom' && customEmojisCache.length === 0) {
+      loadCustomEmojis();
+    }
+  }
+
+  /**
+   * 加载用户的自定义表情列表
+   */
+  async function loadCustomEmojis() {
+    try {
+      const res = await safeFetch(`${API_BASE}/api/custom-emojis`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
-    });
-  }
-
-  function resetStickerResults() {
-    const results = $('#emojiSearchResults');
-    if (!results) return;
-    results.innerHTML = `
-      <div class="emoji-search-empty">
-        <div class="emoji-search-empty-icon">🔍</div>
-        <div class="emoji-search-empty-text">输入关键词搜索表情包</div>
-        <div class="emoji-search-empty-hint">如：开心、爱你、晚安、hello</div>
-      </div>
-    `;
-    const more = $('#emojiSearchMore');
-    if (more) more.style.display = 'none';
-  }
-
-  async function performStickerSearch(query, page) {
-    if (stickerIsLoading && page === 0) return;
-
-    if (stickerAbortController) {
-      stickerAbortController.abort();
-    }
-
-    stickerIsLoading = true;
-    stickerSearchQuery = query;
-    stickerAbortController = new AbortController();
-
-    const loading = $('#emojiSearchLoading');
-    const moreBtn = $('#emojiSearchMoreBtn');
-
-    if (page === 0) {
-      loading.style.display = 'flex';
-      const results = $('#emojiSearchResults');
-      if (results) results.innerHTML = '';
-    }
-    if (moreBtn) moreBtn.disabled = true;
-
-    try {
-      const res = await safeFetch(
-        `${API_BASE}/api/sticker/search?q=${encodeURIComponent(query)}&page=${page}&limit=8`
-      );
-      if (!res.ok) throw new Error('搜索请求失败');
-
+      
+      if (!res.ok) throw new Error('加载失败');
+      
       const data = await res.json();
-      stickerSearchPage = data.page || page;
-      stickerHasMore = data.next;
-
-      loadSearchSuggestions(query);
-      renderStickerResults(data.stickers || [], page === 0);
-
-      if (stickerHasMore) {
-        const more = $('#emojiSearchMore');
-        if (more) more.style.display = 'block';
-        if (moreBtn) moreBtn.disabled = false;
-      } else {
-        const more = $('#emojiSearchMore');
-        if (more) more.style.display = 'none';
-      }
+      customEmojisCache = data.emojis || [];
+      renderCustomEmojis();
     } catch (err) {
-      if (err.name === 'AbortError') return;
-      console.error('表情包搜索失败:', err);
-      if (page === 0) {
-        const results = $('#emojiSearchResults');
-        if (results) {
-          results.innerHTML = `
-            <div class="emoji-search-no-result">
-              <div class="emoji-search-no-result-icon">😕</div>
-              <div class="emoji-search-no-result-text">搜索失败，请稍后重试</div>
-            </div>
-          `;
-        }
-      }
-    } finally {
-      if (loading) loading.style.display = 'none';
-      stickerIsLoading = false;
-      stickerAbortController = null;
+      console.error('加载自定义表情失败:', err);
+      showToast('加载自定义表情失败', 'error');
     }
   }
 
-  function renderStickerResults(stickers, isNewSearch) {
-    const results = $('#emojiSearchResults');
-    if (!results) return;
+  /**
+   * 渲染自定义表情网格
+   */
+  function renderCustomEmojis() {
+    const grid = $('#customEmojiGrid');
+    if (!grid) return;
 
-    if (isNewSearch) {
-      results.innerHTML = '';
-    }
-
-    if ((!stickers || stickers.length === 0) && isNewSearch) {
-      results.innerHTML = `
-        <div class="emoji-search-no-result">
-          <div class="emoji-search-no-result-icon">🔍</div>
-          <div class="emoji-search-no-result-text">没有找到相关表情包</div>
+    if (customEmojisCache.length === 0) {
+      grid.innerHTML = `
+        <div class="custom-emoji-empty">
+          <span>📭</span>
+          <span>还没有自定义表情</span>
+          <span>点击上方按钮上传或收藏聊天图片</span>
         </div>
       `;
       return;
     }
 
-    let grid = results.querySelector('.emoji-sticker-grid');
-    if (!grid) {
-      grid = document.createElement('div');
-      grid.className = 'emoji-sticker-grid';
-      results.appendChild(grid);
-    }
-
-    const fragment = document.createDocumentFragment();
-
-    stickers.forEach(sticker => {
+    grid.innerHTML = '';
+    customEmojisCache.forEach(emoji => {
       const item = document.createElement('div');
-      item.className = 'emoji-sticker-item';
-      item.dataset.stickerUrl = sticker.url;
-      item.dataset.stickerId = sticker.id;
+      item.className = 'custom-emoji-item';
+      item.dataset.id = emoji.id;
+      
+      const img = document.createElement('img');
+      img.src = `/api/custom-emoji-file/${emoji.filename}?token=${authToken}`;
+      img.alt = emoji.original_name;
+      img.loading = 'lazy';
+      item.appendChild(img);
 
-      if (sticker.isLocalEmoji && sticker.emojiChar) {
-        item.classList.add('emoji-sticker-local');
-        const emojiEl = document.createElement('span');
-        emojiEl.className = 'sticker-emoji-char';
-        emojiEl.textContent = sticker.emojiChar;
-        emojiEl.style.fontSize = '42px';
-        emojiEl.style.lineHeight = '1';
-        emojiEl.style.display = 'flex';
-        emojiEl.style.alignItems = 'center';
-        emojiEl.style.justifyContent = 'center';
-        emojiEl.style.width = '100%';
-        emojiEl.style.height = '100%';
-        item.appendChild(emojiEl);
-      } else {
-        const img = document.createElement('img');
-        img.alt = sticker.description || '';
-        img.loading = 'lazy';
-        img.decoding = 'async';
-
-        const placeholder = document.createElement('div');
-        placeholder.className = 'sticker-placeholder';
-        placeholder.innerHTML = '<div class="sticker-placeholder-spinner"></div>';
-        item.appendChild(placeholder);
-
-        img.onload = () => {
-          if (placeholder.parentNode === item) {
-            item.replaceChild(img, placeholder);
-          }
-        };
-        img.onerror = () => {
-          placeholder.innerHTML = '<span class="sticker-error-icon">✕</span>';
-          placeholder.classList.add('sticker-load-error');
-        };
-        img.src = sticker.preview;
-      }
-
-      item.addEventListener('click', () => {
-        insertSticker(sticker.url, sticker.id, sticker.isLocalEmoji, sticker.emojiChar);
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'custom-emoji-delete';
+      deleteBtn.innerHTML = '✕';
+      deleteBtn.title = '删除此表情';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteCustomEmoji(emoji.id);
       });
+      item.appendChild(deleteBtn);
 
-      fragment.appendChild(item);
+      item.addEventListener('click', () => sendCustomEmoji(emoji));
+      grid.appendChild(item);
     });
-
-    grid.appendChild(fragment);
   }
 
-  async function insertSticker(stickerUrl, stickerId, isLocalEmoji, emojiChar) {
+  /**
+   * 处理自定义表情文件上传
+   * @param {Event} e - 文件输入框的change事件
+   */
+  async function handleCustomEmojiUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      showToast('仅支持 JPG/PNG/GIF/WebP 格式', 'error');
+      return;
+    }
+
+    const maxSize = 2 * 1024 * 1024;
+    if (file.size > maxSize) {
+      showToast('文件大小不能超过 2MB', 'error');
+      return;
+    }
+
     try {
-      showToast('正在发送表情包...', 'info');
-
-      if (isLocalEmoji && emojiChar) {
-        const messageRes = await safeFetch(`${API_BASE}/api/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: emojiChar,
-            sender: selectedSender,
-            message_type: 'text'
-          })
-        });
-
-        if (!messageRes.ok) {
-          const errData = await messageRes.json().catch(() => ({}));
-          throw new Error(errData.error || '发送失败');
-        }
-
-        const msgData = await messageRes.json();
-        if (msgData.message) {
-          messagesCache.push(msgData.message);
-          renderMessages(messagesCache);
-          scrollToBottom(true);
-          showToast('✅ 表情已发送', 'success');
-        }
-        return;
-      }
-
-      let blob;
-      if (stickerImgCache.has(stickerId)) {
-        blob = stickerImgCache.get(stickerId);
-      } else {
-        const response = await fetch(stickerUrl);
-        if (!response.ok) throw new Error('下载表情包失败');
-        blob = await response.blob();
-        if (stickerImgCache.size < 20) {
-          stickerImgCache.set(stickerId, blob);
-        }
-      }
-
-      const ext = stickerUrl.includes('.gif') ? 'gif' : 'png';
-      const filename = `sticker_${Date.now()}.${ext}`;
-      const file = new File([blob], filename, { type: blob.type || 'image/gif' });
-
+      await fetchCsrfToken();
+      
       const formData = new FormData();
       formData.append('image', file);
 
-      const uploadRes = await safeFetch(`${API_BASE}/api/upload`, {
+      const res = await safeFetch(`${API_BASE}/api/custom-emojis/upload`, {
         method: 'POST',
         body: formData
       });
 
-      if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({}));
-        throw new Error(errData.error || '上传失败');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '上传失败');
       }
 
-      const uploadData = await uploadRes.json();
+      const data = await res.json();
+      customEmojisCache.unshift(data.emoji);
+      renderCustomEmojis();
+      showToast('✨ 表情上传成功', 'success');
+    } catch (err) {
+      console.error('上传自定义表情失败:', err);
+      showToast(err.message || '上传失败，请重试', 'error');
+    }
 
-      const messageRes = await safeFetch(`${API_BASE}/api/messages`, {
+    e.target.value = '';
+  }
+
+  /**
+   * 发送自定义表情到聊天
+   * @param {Object} emoji - 表情对象
+   */
+  async function sendCustomEmoji(emoji) {
+    try {
+      await fetchCsrfToken();
+      
+      const imageUrl = `/api/custom-emoji-file/${emoji.filename}`;
+      const res = await safeFetch(`${API_BASE}/api/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
-          content: '',
+          content: '[自定义表情]',
           sender: selectedSender,
           message_type: 'image',
-          image_url: uploadData.url
+          image_url: imageUrl
         })
       });
 
-      if (!messageRes.ok) {
-        const errData = await messageRes.json().catch(() => ({}));
-        throw new Error(errData.error || '发送失败');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '发送失败');
       }
 
-      const msgData = await messageRes.json();
-      if (msgData.message) {
-        messagesCache.push(msgData.message);
-        renderMessages(messagesCache);
-        scrollToBottom(true);
-      }
+      const newMsg = await res.json();
+      sendingMessageIds.add(newMsg.id);
+      setTimeout(() => sendingMessageIds.delete(newMsg.id), 60000);
+      messagesCache.push(newMsg);
+      renderMessages(messagesCache);
 
-      $('#emojiPicker').style.display = 'none';
-      showToast('表情包发送成功 💕', 'success');
-
+      const picker = $('#emojiPicker');
+      picker.style.display = 'none';
+      showToast('表情已发送 💕', 'success');
     } catch (err) {
-      console.error('发送表情包失败:', err);
-      showToast('发送表情包失败: ' + err.message, 'error');
+      console.error('发送自定义表情失败:', err);
+      showToast('发送失败，请重试', 'error');
     }
   }
 
-  // ==================== 事件绑定 ====================
+  /**
+   * 收藏消息中的表情图片
+   * @param {number} messageId - 消息ID
+   */
+  async function collectEmoji(messageId) {
+    try {
+      await fetchCsrfToken();
+      
+      const res = await safeFetch(`${API_BASE}/api/custom-emojis/collect`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ messageId })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '收藏失败');
+      }
+
+      const data = await res.json();
+      customEmojisCache.unshift(data.emoji);
+      renderCustomEmojis();
+      showToast('❤️ 表情已收藏到我的表情库', 'success');
+    } catch (err) {
+      console.error('收藏表情失败:', err);
+      showToast(err.message || '收藏失败，请重试', 'error');
+    }
+  }
+
+  /**
+   * 删除自定义表情
+   * @param {number} emojiId - 表情ID
+   */
+  async function deleteCustomEmoji(emojiId) {
+    try {
+      await fetchCsrfToken();
+      
+      const res = await safeFetch(`${API_BASE}/api/custom-emojis/${emojiId}`, {
+        method: 'DELETE'
+      });
+
+      if (!res.ok) throw new Error('删除失败');
+
+      customEmojisCache = customEmojisCache.filter(e => e.id !== emojiId);
+      renderCustomEmojis();
+      showToast('表情已删除', 'success');
+    } catch (err) {
+      console.error('删除自定义表情失败:', err);
+      showToast('删除失败，请重试', 'error');
+    }
+  }
+
+  // ==================== 相册引用模块 ====================
+
+  async function openAlbumPicker() {
+    $('#albumPickerModal').style.display = 'flex';
+    await loadAlbumPickerPhotos();
+  }
+
+  function closeAlbumPicker() {
+    $('#albumPickerModal').style.display = 'none';
+  }
+
+  async function loadAlbumPickerPhotos() {
+    const grid = $('#albumPickerGrid');
+    grid.innerHTML = '<div class="album-empty"><div class="album-empty-emoji"><div class="loading-spinner" style="margin:0 auto;"></div></div><div class="album-empty-text">加载中...</div></div>';
+
+    try {
+      await fetchImageToken();
+      const res = await safeFetch(`${API_BASE}/api/album`);
+      if (!res.ok) {
+        grid.innerHTML = '<div class="album-empty"><div class="album-empty-emoji">😢</div><div class="album-empty-text">加载失败</div></div>';
+        return;
+      }
+
+      const photos = await res.json();
+      renderAlbumPickerPhotos(photos);
+    } catch (err) {
+      grid.innerHTML = '<div class="album-empty"><div class="album-empty-emoji">😢</div><div class="album-empty-text">加载失败</div></div>';
+    }
+  }
+
+  function renderAlbumPickerPhotos(photos) {
+    const grid = $('#albumPickerGrid');
+
+    if (!photos || photos.length === 0) {
+      grid.innerHTML = '<div class="album-empty"><div class="album-empty-emoji">📷</div><div class="album-empty-text">还没有照片哦</div><div class="album-empty-subtext">先去相册上传照片吧~</div></div>';
+      return;
+    }
+
+    let html = '<div class="album-grid-inner sorting-mode">';
+    photos.forEach((photo) => {
+      const isVideo = photo.media_type === 'video';
+      const thumbnailUrl = photo.thumbnail_url
+        ? authImageUrl(photo.thumbnail_url)
+        : authImageUrl(photo.url);
+      const originalUrl = authImageUrl(photo.url);
+
+      if (isVideo) {
+        html += `
+          <div class="album-photo-card album-picker-item" data-original-url="${escapeHtml(photo.url)}" data-media-type="video" data-filename="${escapeHtml(photo.filename)}">
+            <div class="album-video-wrapper">
+              <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy" class="album-video-thumb">
+              <div class="album-video-play-icon">▶</div>
+            </div>
+            <div class="album-photo-info">
+              <div class="photo-uploader">${escapeHtml(photo.uploaded_by)}</div>
+            </div>
+          </div>
+        `;
+      } else {
+        html += `
+          <div class="album-photo-card album-picker-item" data-original-url="${escapeHtml(photo.url)}" data-media-type="image" data-filename="${escapeHtml(photo.filename)}">
+            <img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(photo.original_name)}" loading="lazy">
+            <div class="album-photo-info">
+              <div class="photo-uploader">${escapeHtml(photo.uploaded_by)}</div>
+            </div>
+          </div>
+        `;
+      }
+    });
+    html += '</div>';
+    grid.innerHTML = html;
+
+    grid.querySelectorAll('.album-picker-item').forEach(card => {
+      card.addEventListener('click', () => {
+        const mediaType = card.dataset.mediaType;
+        const albumUrl = card.dataset.originalUrl;
+        sendAlbumMediaToChat(albumUrl, mediaType);
+      });
+    });
+  }
+
+  async function sendAlbumMediaToChat(albumUrl, mediaType) {
+    try {
+      await fetchCsrfToken();
+
+      const msgContent = mediaType === 'video' ? '🎬 视频' : '📷 图片';
+      const msgType = mediaType === 'video' ? 'video' : 'image';
+
+      const body = {
+        content: msgContent,
+        sender: selectedSender,
+        message_type: msgType,
+        image_url: albumUrl
+      };
+
+      if (replyingToMessage) {
+        body.reply_to_id = replyingToMessage.id;
+        if (replyingToMessage.message_type === 'image' && replyingToMessage.image_url) {
+          body.reply_preview = '📷 图片';
+        } else {
+          body.reply_preview = replyingToMessage.content
+            ? replyingToMessage.content.substring(0, 80)
+            : '';
+        }
+      }
+
+      const res = await safeFetch(`${API_BASE}/api/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '发送失败');
+      }
+
+      const newMsg = await res.json();
+      messagesCache.push(newMsg);
+      renderMessages(messagesCache);
+
+      closeAlbumPicker();
+      cancelReply();
+      showToast(mediaType === 'video' ? '视频已发送 💕' : '图片已发送 💕', 'success');
+    } catch (err) {
+      console.error('发送相册媒体失败:', err);
+      showToast(err.message || '发送失败，请重试', 'error');
+    }
+  }
 
   /**
    * 绑定所有全局DOM事件监听器
@@ -925,6 +951,12 @@
     });
 
     $('#imageInput').addEventListener('change', handleImageSelect);
+
+    $('#albumPickBtn').addEventListener('click', openAlbumPicker);
+    $('#closeAlbumPicker').addEventListener('click', closeAlbumPicker);
+    $('#albumPickerModal').addEventListener('click', (e) => {
+      if (e.target === $('#albumPickerModal')) closeAlbumPicker();
+    });
 
     $('#closeImagePreview').addEventListener('click', closeImagePreview);
     $('#cancelImageSend').addEventListener('click', closeImagePreview);
@@ -1029,6 +1061,8 @@
         handleReplyMessage(msgId);
       } else if (action === 'edit') {
         handleEditMessage(msgId);
+      } else if (action === 'collectEmoji') {
+        collectEmoji(msgId);
       } else if (action === 'delete') {
         handleDeleteMessage(msgId);
       }
@@ -1217,6 +1251,8 @@
       }
 
       const newMsg = await msgRes.json();
+      sendingMessageIds.add(newMsg.id);
+      setTimeout(() => sendingMessageIds.delete(newMsg.id), 60000);
       messagesCache.push(newMsg);
       renderMessages(messagesCache);
       closeImagePreview();
@@ -1413,8 +1449,6 @@
    * @returns {void}
    */
   function showLogin() {
-    const pageLoading = $('#pageLoading');
-    if (pageLoading) pageLoading.classList.add('hidden');
     $('#loginOverlay').style.display = 'flex';
     $('#app').style.display = 'none';
     $('#loginError').textContent = '';
@@ -1436,14 +1470,8 @@
    * @returns {void}
    */
   function showApp() {
-    const pageLoading = $('#pageLoading');
-    const app = $('#app');
     $('#loginOverlay').style.display = 'none';
-    app.style.display = 'flex';
-    requestAnimationFrame(() => {
-      app.classList.add('visible');
-      if (pageLoading) pageLoading.classList.add('hidden');
-    });
+    $('#app').style.display = 'flex';
     if (currentUser) {
       $('#currentUser').textContent = currentUser.displayName;
       selectedSender = currentUser.displayName;
@@ -1563,7 +1591,7 @@
       let bubbleContent;
       if (msg.message_type === 'image' && msg.image_url) {
         bubbleContent = `<img class="message-image" src="${escapeHtml(authImageUrl(msg.image_url))}" alt="图片" data-action="viewImage" data-url="${escapeHtml(authImageUrl(msg.image_url))}" loading="lazy">`;
-        if (msg.content && msg.content !== '📷 图片') {
+        if (msg.content && msg.content !== '📷 图片' && msg.content !== '[自定义表情]') {
           const escapedContent = escapeHtml(msg.content).replace(/\n/g, '<br>');
           bubbleContent += `<div class="message-image-caption">${escapedContent}</div>`;
         }
@@ -1642,6 +1670,12 @@
     const menu = $('#messageContextMenu');
     menu.dataset.messageId = msgId;
     menu.style.display = 'block';
+
+    const message = messagesCache.find(m => m.id === msgId);
+    const collectBtn = $('#collectEmojiMenuItem');
+    if (collectBtn) {
+      collectBtn.style.display = (message && message.message_type === 'image' && message.image_url) ? 'flex' : 'none';
+    }
 
     const menuRect = menu.getBoundingClientRect();
     const winW = window.innerWidth;
@@ -1874,13 +1908,18 @@
    * @async
    * @returns {Promise<void>}
    */
+  let isSending = false;
+
   async function sendMessage() {
+    if (isSending) return;
+
     const input = $('#messageInput');
     const content = input.value.trim();
     const sender = selectedSender;
 
     if (!content) return;
 
+    isSending = true;
     const sendBtn = $('#sendBtn');
     sendBtn.disabled = true;
 
@@ -1913,6 +1952,8 @@
       }
 
       const newMsg = await res.json();
+      sendingMessageIds.add(newMsg.id);
+      setTimeout(() => sendingMessageIds.delete(newMsg.id), 60000);
       messagesCache.push(newMsg);
       renderMessages(messagesCache);
 
@@ -1923,6 +1964,7 @@
     } catch (err) {
       showToast('发送失败，请检查网络', 'error');
     } finally {
+      isSending = false;
       sendBtn.disabled = false;
     }
   }
@@ -2033,7 +2075,13 @@
 
       // 处理新到达的消息
       if (newMessages && newMessages.length > 0) {
-        const trulyNew = newMessages.filter(msg => !messagesCache.find(m => m.id === msg.id));
+        const trulyNew = newMessages.filter(msg => {
+          if (sendingMessageIds.has(msg.id)) {
+            sendingMessageIds.delete(msg.id);
+            return false;
+          }
+          return !messagesCache.find(m => m.id === msg.id);
+        });
         trulyNew.forEach(msg => messagesCache.push(msg));
 
         if (trulyNew.length > 0) {
@@ -2610,7 +2658,6 @@
       $('#albumViewLoading').style.display = 'none';
       const viewVideo = $('#albumViewVideo');
       if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
-      resetVideoDownloadState();
     });
     $('#albumViewOverlay').addEventListener('click', (e) => {
       if (e.target === $('#albumViewOverlay')) {
@@ -2619,12 +2666,8 @@
         $('#albumViewLoading').style.display = 'none';
         const viewVideo = $('#albumViewVideo');
         if (viewVideo) { viewVideo.pause(); viewVideo.src = ''; viewVideo.style.display = 'none'; }
-        resetVideoDownloadState();
       }
     });
-
-    // 视频下载按钮点击事件
-    $('#albumVideoDownloadBtn').addEventListener('click', handleVideoDownload);
   }
 
   // ==================== 邮箱设置 ====================
@@ -3091,150 +3134,6 @@
    *   url（原图URL）, thumbnail_url（缩略图URL）
    * @returns {void}
    */
-
-  // ==================== 视频下载功能 ====================
-  
-  let currentVideoUrl = null;
-  let currentVideoFilename = null;
-  let isDownloading = false;
-  let downloadAbortController = null;
-
-  function showVideoDownloadButton(url, filename) {
-    const btn = $('#albumVideoDownloadBtn');
-    if (!btn) return;
-    currentVideoUrl = url;
-    currentVideoFilename = filename;
-    btn.style.display = 'flex';
-    btn.classList.remove('downloading');
-    hideDownloadStatus();
-  }
-
-  function hideVideoDownloadButton() {
-    const btn = $('#albumVideoDownloadBtn');
-    if (btn) btn.style.display = 'none';
-    currentVideoUrl = null;
-    currentVideoFilename = null;
-    hideDownloadStatus();
-  }
-
-  function resetVideoDownloadState() {
-    hideVideoDownloadButton();
-    isDownloading = false;
-    if (downloadAbortController) {
-      downloadAbortController.abort();
-      downloadAbortController = null;
-    }
-  }
-
-  function showDownloadStatus(status, text, progress) {
-    const statusEl = $('#albumDownloadStatus');
-    if (!statusEl) return;
-    
-    statusEl.className = 'video-download-status';
-    if (status === 'success') statusEl.classList.add('success');
-    if (status === 'error') statusEl.classList.add('error');
-    
-    const textEl = statusEl.querySelector('.download-status-text');
-    const progressFill = statusEl.querySelector('.download-progress-fill');
-    const spinner = statusEl.querySelector('.download-spinner');
-    
-    if (textEl) textEl.textContent = text || '下载中...';
-    if (progressFill) progressFill.style.width = (progress || 0) + '%';
-    if (spinner) spinner.style.display = (status === 'downloading') ? 'block' : 'none';
-    
-    statusEl.style.display = 'block';
-    
-    if (status === 'success' || status === 'error') {
-      setTimeout(() => {
-        statusEl.style.display = 'none';
-      }, 2500);
-    }
-  }
-
-  function hideDownloadStatus() {
-    const statusEl = $('#albumDownloadStatus');
-    if (statusEl) statusEl.style.display = 'none';
-  }
-
-  async function handleVideoDownload() {
-    if (!currentVideoUrl || isDownloading) return;
-    
-    const btn = $('#albumVideoDownloadBtn');
-    if (!btn) return;
-    
-    isDownloading = true;
-    btn.classList.add('downloading');
-    downloadAbortController = new AbortController();
-    
-    showDownloadStatus('downloading', '准备下载...', 0);
-    
-    try {
-      const response = await fetch(currentVideoUrl, {
-        signal: downloadAbortController.signal
-      });
-      
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      
-      const contentLength = response.headers.get('content-length');
-      const total = parseInt(contentLength) || 0;
-      let loaded = 0;
-      
-      const reader = response.body.getReader();
-      const chunks = [];
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        chunks.push(value);
-        loaded += value.length;
-        
-        if (total > 0) {
-          const progress = Math.round((loaded / total) * 100);
-          showDownloadStatus('downloading', `下载中 ${formatFileSize(loaded)} / ${formatFileSize(total)}`, progress);
-        } else {
-          showDownloadStatus('downloading', `下载中 ${formatFileSize(loaded)}...`, Math.min(loaded / (1024 * 1024) * 10, 95));
-        }
-      }
-      
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      const url = URL.createObjectURL(blob);
-      
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = currentVideoFilename || 'video.mp4';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      
-      showDownloadStatus('success', '✓ 下载完成', 100);
-      showToast('视频下载成功', 'success');
-      
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        showDownloadStatus('error', '下载已取消', 0);
-      } else {
-        console.error('视频下载失败:', err);
-        showDownloadStatus('error', '✗ 下载失败', 0);
-        showToast('视频下载失败: ' + err.message, 'error');
-      }
-    } finally {
-      isDownloading = false;
-      btn.classList.remove('downloading');
-      downloadAbortController = null;
-    }
-  }
-
-  function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-
   function renderAlbumPhotos(photos) {
     const grid = $('#albumGrid');
     const countEl = $('#albumCount');
@@ -3387,15 +3286,11 @@
           viewVideo.onerror = () => {
             loadingEl.style.display = 'none';
             hideBuffering();
-            // showToast('视频加载失败', 'error');
+            showToast('视频加载失败', 'error');
           };
 
           viewVideo.src = originalUrl;
           viewVideo.load();
-          
-          const photoIndex = parseInt(card.dataset.index);
-          const currentPhoto = albumPhotosCache[photoIndex];
-          showVideoDownloadButton(originalUrl, currentPhoto?.original_name || 'video.mp4');
           $('#albumViewOverlay').style.display = 'flex';
         } else {
           let viewVideo = $('#albumViewVideo');
@@ -3414,7 +3309,6 @@
             viewImg.style.opacity = '1';
           };
           viewImg.src = originalUrl;
-          hideVideoDownloadButton();
           $('#albumViewOverlay').style.display = 'flex';
         }
       });

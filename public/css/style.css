@@ -308,12 +308,6 @@ html, body {
   height: 100dvh;
   max-width: 800px;
   margin: 0 auto;
-  opacity: 0;
-  transition: opacity 0.15s ease-out;
-}
-
-.app-container.visible {
-  opacity: 1;
 }
 
 .app-header {
@@ -445,7 +439,7 @@ html, body {
 .messages-container {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
 .message-wrapper {
@@ -476,7 +470,7 @@ html, body {
 .message-sender {
   font-size: 12px;
   color: var(--gray-400);
-  margin-bottom: 2px;
+  margin-bottom: 4px;
   padding: 0 8px;
   display: flex;
   align-items: center;
@@ -497,10 +491,10 @@ html, body {
 
 .message-bubble {
   max-width: 75%;
-  padding: 8px 14px;
+  padding: 10px 16px;
   border-radius: var(--radius-lg);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.6;
   word-wrap: break-word;
   overflow-wrap: break-word;
   position: relative;
@@ -536,9 +530,9 @@ html, body {
 }
 
 .message-image-caption {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .sender-xiaocai .message-image-caption {
@@ -548,7 +542,7 @@ html, body {
 .message-time {
   font-size: 11px;
   color: var(--gray-400);
-  margin-top: 2px;
+  margin-top: 4px;
   padding: 0 8px;
 }
 
@@ -565,7 +559,7 @@ html, body {
 .message-actions {
   display: flex;
   gap: 4px;
-  margin-top: 2px;
+  margin-top: 4px;
   padding: 0 8px;
   opacity: 0;
   transition: opacity 0.2s ease;
@@ -783,7 +777,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 8px 0;
+  margin: 16px 0;
 }
 
 .date-divider::before,
@@ -807,7 +801,7 @@ html, body {
   transform: translateX(-50%);
   width: 90%;
   max-width: 400px;
-  max-height: 360px;
+  max-height: 300px;
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -816,328 +810,20 @@ html, body {
   z-index: 100;
   overflow: hidden;
   animation: fadeInUp 0.2s ease-out;
-  display: flex;
-  flex-direction: column;
 }
 
 .emoji-picker-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--pink-100);
-  flex-shrink: 0;
 }
 
-.emoji-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.emoji-tab {
-  background: none;
-  border: none;
-  font-size: 13px;
+.emoji-picker-header span {
+  font-size: 14px;
   font-weight: 600;
-  color: var(--gray-400);
-  cursor: pointer;
-  padding: 6px 14px;
-  border-radius: 20px;
-  transition: all 0.2s ease;
-  min-height: 36px;
-  white-space: nowrap;
-}
-
-.emoji-tab:hover {
   color: var(--gray-600);
-  background: var(--pink-50);
-}
-
-.emoji-tab.active {
-  color: var(--pink-500);
-  background: var(--pink-100);
-}
-
-.emoji-panel {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.emoji-panel-emoji {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  flex: 1;
-  min-height: 0;
-}
-
-.emoji-panel-search {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-.emoji-search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--gray-100);
-  flex-shrink: 0;
-}
-
-.emoji-search-icon {
-  color: var(--gray-400);
-  flex-shrink: 0;
-}
-
-.emoji-search-input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-size: 14px;
-  background: transparent;
-  color: var(--gray-700);
-  padding: 4px 0;
-}
-
-.emoji-search-input::placeholder {
-  color: var(--gray-400);
-}
-
-.emoji-search-clear {
-  background: none;
-  border: none;
-  font-size: 14px;
-  color: var(--gray-400);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: all 0.15s ease;
-  min-width: 28px;
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.emoji-search-clear:hover {
-  background: var(--gray-100);
-  color: var(--gray-600);
-}
-
-.emoji-search-suggestions {
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--gray-100);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.emoji-suggestion-tag {
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 14px;
-  background: var(--pink-50);
-  color: var(--pink-500);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  border: 1px solid var(--pink-100);
-  white-space: nowrap;
-}
-
-.emoji-suggestion-tag:hover {
-  background: var(--pink-100);
-  border-color: var(--pink-200);
-}
-
-.emoji-search-results {
-  flex: 1;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 8px;
-  min-height: 0;
-  max-height: 220px;
-}
-
-.emoji-search-results::-webkit-scrollbar {
-  width: 4px;
-}
-
-.emoji-search-results::-webkit-scrollbar-thumb {
-  background: var(--pink-200);
-  border-radius: 2px;
-}
-
-.emoji-search-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 16px;
-  color: var(--gray-400);
-}
-
-.emoji-search-empty-icon {
-  font-size: 36px;
-  margin-bottom: 12px;
-  opacity: 0.6;
-}
-
-.emoji-search-empty-text {
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 6px;
-}
-
-.emoji-search-empty-hint {
-  font-size: 12px;
-  color: var(--gray-300);
-}
-
-.emoji-search-no-result {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 16px;
-  color: var(--gray-400);
-}
-
-.emoji-search-no-result-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
-  opacity: 0.5;
-}
-
-.emoji-search-no-result-text {
-  font-size: 13px;
-}
-
-.emoji-sticker-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.emoji-sticker-item {
-  aspect-ratio: 1;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  background: var(--gray-50);
-  border: 2px solid transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-}
-
-.emoji-sticker-item:hover {
-  border-color: var(--pink-300);
-  background: var(--pink-50);
-  transform: scale(1.05);
-}
-
-.emoji-sticker-item:active {
-  transform: scale(0.95);
-}
-
-.emoji-sticker-item img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.emoji-sticker-local {
-  background: linear-gradient(135deg, #fff5f7 0%, #fef2f6 50%, #fff0f5 100%);
-}
-
-.emoji-sticker-local .sticker-emoji-char {
-  transition: transform 0.2s ease;
-  filter: drop-shadow(0 1px 2px rgba(244, 114, 182, 0.15));
-}
-
-.emoji-sticker-local:hover .sticker-emoji-char {
-  transform: scale(1.15) rotate(-3deg);
-}
-
-.sticker-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--gray-50);
-}
-
-.sticker-placeholder-spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--pink-200);
-  border-top-color: var(--pink-400);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.sticker-load-error {
-  background: var(--gray-100);
-}
-
-.sticker-error-icon {
-  font-size: 16px;
-  color: var(--gray-400);
-  font-weight: bold;
-}
-
-.emoji-search-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 16px;
-  color: var(--gray-400);
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.emoji-search-loading .loading-spinner {
-  width: 18px;
-  height: 18px;
-  border-width: 2px;
-}
-
-.emoji-search-more {
-  padding: 8px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.emoji-search-more-btn {
-  background: var(--pink-50);
-  border: 1px solid var(--pink-200);
-  color: var(--pink-500);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 8px 24px;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.emoji-search-more-btn:hover {
-  background: var(--pink-100);
-  border-color: var(--pink-300);
-}
-
-.emoji-search-more-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .emoji-close-btn {
@@ -1201,6 +887,171 @@ html, body {
 
 .emoji-item:active {
   transform: scale(0.95);
+}
+
+/* ==================== 自定义表情样式 ==================== */
+
+.emoji-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.emoji-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-500);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.emoji-tab:hover {
+  background: var(--pink-100);
+  color: var(--gray-600);
+}
+
+.emoji-tab.active {
+  background: var(--pink-200);
+  color: var(--gray-700);
+  font-weight: 600;
+}
+
+.emoji-tab-content {
+  display: none;
+}
+
+.emoji-tab-content.active {
+  display: block;
+}
+
+.custom-emoji-toolbar {
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--pink-100);
+}
+
+.custom-emoji-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, #ff6b9d, #ff8a80);
+  color: white;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(255, 107, 157, 0.3);
+}
+
+.custom-emoji-upload-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 107, 157, 0.4);
+}
+
+.custom-emoji-upload-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.custom-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+.custom-emoji-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  gap: 8px;
+  color: var(--gray-400);
+}
+
+.custom-emoji-empty span:first-child {
+  font-size: 40px;
+}
+
+.custom-emoji-empty span:nth-child(2) {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+.custom-emoji-empty span:last-child {
+  font-size: 12px;
+  color: var(--gray-400);
+  text-align: center;
+  max-width: 200px;
+}
+
+.custom-emoji-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--gray-100);
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.custom-emoji-item:hover {
+  transform: scale(1.05);
+  border-color: var(--pink-300);
+  box-shadow: 0 4px 12px rgba(255, 107, 157, 0.2);
+}
+
+.custom-emoji-item:active {
+  transform: scale(0.95);
+}
+
+.custom-emoji-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.custom-emoji-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.custom-emoji-item:hover .custom-emoji-delete {
+  opacity: 1;
+}
+
+.custom-emoji-delete:hover {
+  background: rgba(239, 68, 68, 0.8);
+  transform: scale(1.1);
 }
 
 .modal-overlay {
@@ -1462,127 +1313,6 @@ html, body {
   transform: scale(1.1);
 }
 
-/* ========== 视频下载按钮 ========== */
-.video-download-btn {
-  position: absolute;
-  top: -40px;
-  left: 0;
-  background: linear-gradient(135deg, var(--pink-400), var(--pink-500));
-  border: none;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4);
-  transition: all 0.25s ease;
-  z-index: 10;
-  padding: 0;
-}
-
-.video-download-btn:hover {
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
-  transform: scale(1.1) translateY(-2px);
-  box-shadow: 0 6px 16px rgba(236, 72, 153, 0.5);
-}
-
-.video-download-btn:active {
-  transform: scale(0.95);
-}
-
-.video-download-btn.downloading {
-  pointer-events: none;
-  opacity: 0.7;
-}
-
-.video-download-btn.downloading svg {
-  animation: downloadSpin 1s linear infinite;
-}
-
-@keyframes downloadSpin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* ========== 视频下载状态提示 ========== */
-.video-download-status {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  color: white;
-  padding: 12px 20px;
-  border-radius: 24px;
-  font-size: 13px;
-  z-index: 15;
-  min-width: 180px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  animation: statusFadeIn 0.3s ease-out;
-}
-
-@keyframes statusFadeIn {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
-.download-status-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.download-spinner {
-  width: 24px;
-  height: 24px;
-  border: 3px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.download-status-text {
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.download-progress-bar {
-  width: 100%;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-top: 4px;
-}
-
-.download-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #ff6b9d, #c44569);
-  border-radius: 2px;
-  width: 0%;
-  transition: width 0.3s ease;
-}
-
-.video-download-status.success {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(5, 150, 105, 0.95));
-}
-
-.video-download-status.error {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(220, 38, 38, 0.95));
-}
-
 /* ========== 回复预览栏 ========== */
 .reply-preview-bar {
   display: flex;
@@ -1680,9 +1410,9 @@ html, body {
 .message-reply-ref {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 6px 10px;
-  margin-bottom: 4px;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
   background: rgba(244, 114, 182, 0.06);
   border-left: 3px solid var(--pink-400);
   border-radius: 0 6px 6px 0;
@@ -2148,7 +1878,7 @@ html, body {
 
   .message-bubble {
     max-width: 82%;
-    padding: 7px 12px;
+    padding: 9px 14px;
     font-size: 15px;
   }
 
@@ -2177,15 +1907,7 @@ html, body {
   .emoji-picker {
     width: 95%;
     bottom: 70px;
-    max-height: 300px;
-  }
-
-  .emoji-sticker-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .emoji-search-input {
-    font-size: 16px;
+    max-height: 260px;
   }
 
   .emoji-grid {
@@ -2198,6 +1920,29 @@ html, body {
     font-size: 20px;
     padding: 4px;
     min-height: 40px;
+  }
+
+  .emoji-tab {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .custom-emoji-upload-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  .custom-emoji-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 8px;
+    max-height: 180px;
+  }
+
+  .custom-emoji-delete {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
   }
 
   .sender-display {
@@ -2324,7 +2069,7 @@ html, body {
   .message-bubble {
     max-width: 85%;
     font-size: 14px;
-    padding: 6px 10px;
+    padding: 8px 12px;
   }
 
   .header-title {
@@ -2386,12 +2131,7 @@ html, body {
 
   .emoji-picker {
     bottom: 60px;
-    max-height: 240px;
-  }
-
-  .emoji-sticker-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
+    max-height: 200px;
   }
 
   .emoji-grid {
@@ -3208,40 +2948,5 @@ html, body {
   .album-grid-inner {
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 8px;
-  }
-}
-
-/* ========== 页面加载状态 ========== */
-.page-loading {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--pink-50) 0%, var(--rose-100) 50%, var(--pink-100) 100%);
-  transition: opacity 0.2s ease-out;
-}
-
-.page-loading.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.page-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--pink-200);
-  border-top-color: var(--pink-400);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
   }
 }

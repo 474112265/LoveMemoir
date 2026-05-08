@@ -1,5 +1,4 @@
 const https = require('https');
-const http = require('http');
 const nodemailer = require('nodemailer');
 const { getDb } = require('./database');
 const { getUserEmail, addLog } = require('./email-utils');
@@ -14,7 +13,6 @@ const SMTP_CONFIG = {
   }
 };
 
-const WEATHER_API = 'https://api.openweathermap.org/data/2.5/weather';
 const FREE_WEATHER_API = 'https://api.open-meteo.com/v1/forecast';
 
 let transporter = null;
@@ -214,10 +212,14 @@ async function sendDailyWeatherReminders() {
   }
 
   for (const user of users) {
-    const email = getUserEmail(user.id);
-    if (!email) continue;
+    try {
+      const email = getUserEmail(user.id);
+      if (!email) continue;
 
-    await sendWeatherEmail(email, user.display_name, user.location_lat, user.location_lng, user.location_name);
+      await sendWeatherEmail(email, user.display_name, user.location_lat, user.location_lng, user.location_name);
+    } catch (err) {
+      addLog('error', `天气提醒发送失败(用户:${user.display_name})`, err.message);
+    }
   }
 }
 
@@ -234,7 +236,11 @@ function startWeatherScheduler() {
     addLog('info', '天气提醒调度器已启动', `下次发送: ${target.toLocaleString('zh-CN')}`);
 
     setTimeout(async () => {
-      await sendDailyWeatherReminders();
+      try {
+        await sendDailyWeatherReminders();
+      } catch (err) {
+        addLog('error', '天气提醒调度执行异常', err.message);
+      }
       scheduleNext();
     }, delay);
   }

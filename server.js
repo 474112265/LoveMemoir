@@ -62,7 +62,7 @@ const { getDb } = require('./database');
 const { authMiddleware, loginHandler, logoutHandler } = require('./auth');
 
 /** 自定义图片加密模块，提供AES加解密、批量加密迁移等功能 */
-const { encryptFile, streamDecryptedFile, streamDecryptedFileWithRange, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
+const { encryptFile, decryptFileToBuffer, streamDecryptedFile, streamDecryptedFileWithRange, encryptDirectory, getContentType, isEncrypted } = require('./image-crypto');
 
 /** 自定义邮件工具模块，提供邮箱设置、邮件发送、提醒调度等功能 */
 const { saveUserEmail, getUserEmail, sendReminderEmail, startReminderScheduler, getEmailLogs, isValidEmail } = require('./email-utils');
@@ -248,6 +248,47 @@ const albumUpload = multer({
   }
 });
 
+/**
+ * Multer自定义表情上传存储配置
+ * 仅支持图片文件，存储到 customEmojiDir
+ */
+const customEmojiDir = path.join(__dirname, 'data', 'custom-emojis');
+const customEmojiStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    if (!fs.existsSync(customEmojiDir)) {
+      fs.mkdirSync(customEmojiDir, { recursive: true });
+    }
+    cb(null, customEmojiDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const name = `emoji_${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`;
+    cb(null, name);
+  }
+});
+
+/** 自定义表情允许的图片格式 */
+const CUSTOM_EMOJI_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+
+/** 自定义表情最大文件大小：2MB */
+const CUSTOM_EMOJI_MAX_SIZE = 2 * 1024 * 1024;
+
+/** 配置好的Multer自定义表情上传中间件实例 */
+const customEmojiUpload = multer({
+  storage: customEmojiStorage,
+  limits: { fileSize: CUSTOM_EMOJI_MAX_SIZE },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!CUSTOM_EMOJI_EXTENSIONS.has(ext)) {
+      return cb(new Error('仅支持 JPG/PNG/GIF/WebP 格式'));
+    }
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('只允许上传图片文件'));
+    }
+    cb(null, true);
+  }
+});
+
 // ==================== 安全机制 ====================
 
 /** CSRF令牌请求头名称 */
@@ -392,7 +433,7 @@ function validateCsrfToken(req, res, next) {
   let record = csrfTokenStore.get(csrfToken);
   if (!record) {
     const { validateCsrfToken: authValidateCsrfToken } = require('./auth');
-    const userId = req.user ? req.user.id : null;
+    const userId = req.user ? (req.user.user_id || req.user.id) : null;
     if (!authValidateCsrfToken(csrfToken, userId)) {
       return res.status(403).json({ error: '无效的CSRF令牌' });
     }
@@ -401,7 +442,8 @@ function validateCsrfToken(req, res, next) {
       csrfTokenStore.delete(csrfToken);
       return res.status(403).json({ error: 'CSRF令牌已过期' });
     }
-    if (req.user && record.userId !== null && record.userId !== req.user.id) {
+    const reqUserId = req.user ? (req.user.user_id || req.user.id) : null;
+    if (req.user && record.userId !== null && record.userId !== reqUserId) {
       return res.status(403).json({ error: 'CSRF令牌与用户不匹配' });
     }
   }
@@ -470,190 +512,10 @@ app.use(cors({
 // JSON请求体解析中间件（限制1MB防止DoS攻击）
 app.use(express.json({ limit: '1mb' }));
 
-// ==================== API 路由定义 ====================
-
-// ---------- 表情包搜索路由（必须在 static 之前避免被拦截） ----------
-async function tryFetchTenorInternal(searchTerm, limitNum, pos) {
-  const tenorKey = process.env.TENOR_API_KEY || 'AIzaSyA8YiIUFa5w01oQe0T2_9KH1K7tU_FqHcE';
-  const tenorUrl = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(searchTerm)}&key=${tenorKey}&limit=${limitNum}&pos=${pos}&media_filter=gif,tinygif,mediumgif&contentfilter=high&ar_range=standard`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
-  let fetchRes;
-  try {
-    fetchRes = await fetch(tenorUrl, { headers: { 'Accept': 'application/json' }, signal: controller.signal });
-  } finally { clearTimeout(timeoutId); }
-  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
-  return await fetchRes.json();
-}
-
-async function tryFetchDoutula(keyword, limitNum, pageNum) {
-  const doutulaUrl = `https://www.doutula.com/api/search?keyword=${encodeURIComponent(keyword)}&mime=0&page=${pageNum + 1}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  let fetchRes;
-  try {
-    fetchRes = await fetch(doutulaUrl, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.doutula.com/' },
-      signal: controller.signal
-    });
-  } finally { clearTimeout(timeoutId); }
-  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
-  return await fetchRes.json();
-}
-
-async function tryFetchEmojiFamily(searchQuery, limitNum) {
-  const url = `https://www.emoji.family/api/emojis?search=${encodeURIComponent(searchQuery)}&limit=${Math.min(limitNum * 2, 50)}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4000);
-  let fetchRes;
-  try { fetchRes = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: controller.signal }); }
-  finally { clearTimeout(timeoutId); }
-  if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
-  return await fetchRes.json();
-}
-
-// 表情包搜索路由（必须在 static 之前）
-app.get('/api/sticker/test', (req, res) => {
-  res.json({ status: 'ok', time: Date.now() });
-});
-
-const SEARCH_SUGGESTIONS = ['开心', '爱你', '晚安', '么么', '抱抱', '想念', '生日快乐', '加油', '可爱', '亲亲', '谢谢', 'hello', 'love', 'happy', 'cute', 'kiss', 'hug'];
-
-app.get('/api/sticker/suggestions', authMiddleware, (req, res) => {
-  res.json({ suggestions: SEARCH_SUGGESTIONS });
-});
-
-const stickerCache = new Map();
-const STICKER_CACHE_TTL = 5 * 60 * 1000;
-
-function getCachedStickers(key) { const entry = stickerCache.get(key); if (!entry) return null; if (Date.now() - entry.ts > STICKER_CACHE_TTL) { stickerCache.delete(key); return null; } return entry.data; }
-function setCachedStickers(key, data) { stickerCache.set(key, { data, ts: Date.now() }); }
-
-const localDb = {
-  '开心': ['😀','😃','😄','😁','😆','😊','🙂','😸','🤩','✨','🎉','💖','❤️‍🔥'],
-  '快乐': ['😊','😄','🥳','🎉','🌟','💫','✨','😆','🤗','💕'],
-  '爱你': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','💕','💞','💓','💗','💘','💝','❤️‍🔥','❤️‍🩹','♥️','💋','😘','🥰','😍','🩷','🩵','🩶','🤎'],
-  'love': ['❤️','💕','💖','💗','💝','💘','💞','💓','❣️','😘','😍','🥰','👩‍❤️‍👨','👩‍❤️‍💋‍👨','♥️','💋','💌','🌹','🌷','💐'],
-  'happy': ['😀','😃','😄','😁','😆','😊','🙂','🤩','🥳','🌟','✨','💫','🎉','🎊','🥰','😸'],
-  '晚安': ['🌙','⭐','🌟','💫','😴','🛏️','🌜','🌛','🌚','☪️','🌙','💤','👋','👋🏻','🫂','🤗','💕'],
-  '么么': ['😘','😚','😙','💋','👄','💏','💑','😽','🥰','💕','💗','❤️','🩷'],
-  '抱抱': ['🤗','🫂','🫡','👐','🤲','🙌','👋','👐','💪','🦾','❤️','💕','🧸','🧸','🧸','🧸'],
-  '想念': ['💭','💕','💗','❤️','🥺','🥹','😢','😿','🫠','💔','🫂','🤗','🌙','⭐','✨','💌'],
-  '生日': ['🎂','🎉','🎈','🎁','🎊','🥳','🎂','🍰','🧁','🎉','🎊','🎁','🎀','🌟','✨','🥳','👑'],
-  '加油': ['💪','👊','✊','👍','👍🏻','🔥','⭐','🌟','💫','🚀','💯','🏆','🥇','🎯','👏','🙌'],
-  '可爱': ['🥰','🥺','🥹','😊','🤗','🫶','💕','🌸','🌺','🌻','🌷','🦋','🐱','🐶','🐰','🧸','🌈','✨','💫','🤍','🩷'],
-  'cute': ['🥰','🥺','🥹','😊','🤗','🫶','💕','🌸','🦋','🐱','🐰','🧸','🌈','✨','💫','🩷','🩵','🤍','🌼','🌻'],
-  '亲亲': ['😘','😚','😙','💋','👄','💏','💑','😽','🥰','💕','💗','❤️','🩷','💋','🫦'],
-  '谢谢': ['🙏','🙏🏻','🤝','💐','🌸','🌷','🌹','❤️','💕','👍','👍🏻','🫶','✨','🌟','💫'],
-  'kiss': ['😘','😚','😙','💋','👄','💏','💑','😽','💕','💗','❤️','🩷','💋','🫦','😗'],
-  'hug': ['🤗','🫂','🫡','👐','🤲','🙌','💪','❤️','💕','🧸','🫶','🩷','🫂','🤗'],
-  'hello': ['👋','👋🏻','🤙','🖐️','✋','🖖','🫰','🫶','😊','🙂','👋','🙋','🙋🏻‍♀️','🙋🏻','👋🏻‍♂️','👋🏻‍♀️','👋🏼','👋🏽','👋🏾','👋🏿','🤗','🫂'],
-  'hi': ['👋','👋🏻','🤙','🖐️','✋','🖖','😊','🙂','🙋','🙋🏻','👋🏻‍♂️','👋🏻‍♀️','🤗','🫂'],
-  '笑': ['😀','😃','😄','😁','😆','😅','🤣','😂','😊','🙂','😸','😹','🤭','😏','🥴','🤪','😜','😝'],
-  '哭': ['😢','😭','😿','🥺','🥹','😥','😓','💔','🫠','😞','😔','🥲','☔','🌧️','💧','💦'],
-  '生气': ['😠','😡','🤬','😤','💢','🔥','😾','👊','👊🏻','💥','🤯','😣','😒','🙄','😑'],
-  '惊讶': ['😮','😲','🤯','😱','🙀','❗','❕','‼️','⁉️','❓','❔','🤯','😲','😮‍💨','🫢'],
-  '害怕': ['😨','😰','😱','🙀','🫣','😳','🫨','🫥','👻','💀','☠️','🕷️','🕸️','🦇','🌑','🌚'],
-  '酷': ['😎','🕶️','💪','🔥','👊','🤘','🤙','✌️','☮️','🤟','🏄','🛹','🛹','🛹','🛹'],
-  '好吃': ['😋','🤤','🍕','🍔','🍟','🌭','🍿','🧁','🍰','🎂','🍩','🍪','🍫','🍭','🍮','🍯','🥤','🧋','☕','🍵'],
-  '饿': ['🤤','😋','🍽️','🍴','🥘','🍲','🍜','🍝','🍛','🍣','🍱','🥟','🦐','🥩','🍗','🌮','🌯','🥪','🌭'],
-  '冷': ['🥶','❄️','🌨️','☃️','⛄','🧊','🧣','🧥','🔥','🌡️','🌬️','🫧','🥶','🥴','🥴'],
-  '热': ['🥵','🔥','☀️','🌡️','🌋','🏖️','🏜️','🥵','🫠','💦','🧊','🍦','🍧','🥤','🧋','🫗'],
-  '钱': ['💰','💵','💴','💶','💷','💸','💳','🧾','💹','🤑','💲','💱','🏧','💰','💎','👑'],
-  '棒': ['👍','👍🏻','👍🏼','👍🏽','👍🏾','👍🏿','👌','👌🏻','🙌','💪','🔥','⭐','🌟','✨','🏆','🥇','💯','🎯'],
-  '不好': ['👎','👎🏻','👎🏼','👎🏽','👎🏾','👎🏿','🙅','🙅🏻','🙅🏼','🙅🏽','🙅🏾','🙅🏿','🚫','⛔','❌','❎','🚷','🚯','🚱','📵','🔞','☠️','💀','😞','😔'],
-  'yes': ['✅','✔️','👍','👍🏻','👌','👌🏻','🙌','💪','🆗','👌','👍','✅','🆙','🆓','🆕','🆒','🎯','💯'],
-  'no': ['❌','❎','🚫','⛔','🙅','🙅🏻','👎','👎🏻','🚷','🚯','🚱','📵','🔞','☠️','💀','🚳','🚭','🚫'],
-  'ok': ['👌','👌🏻','👍','👍🏻','✅','✔️','🆗','🙌','💪','👌','👍','✅','🆙','🎯','💯'],
-  'good': ['👍','👍🏻','👌','👌🏻','✅','✔️','🆗','🙌','💪','🌟','⭐','✨','🔥','🎯','💯','🏆','🥇'],
-  'bad': ['👎','👎🏻','🙅','🙅🏻','❌','❎','🚫','⛔','😞','😔','💔','📉','📉','📉','📉','📉'],
-  '狗': ['🐶','🐕','🦮','🐕‍🦺','🐩','🐺','🦊','🦝','🐶','🐕','🐩','🐺','🦊'],
-  '猫': ['🐱','🐈','🐈‍⬛','🦁','🐯','🐅','🐆','🐴','🫏','🦓','🐮','🐂','🐃','🐱','🐈','🐈‍⬛'],
-  '花': ['🌸','🌺','🌻','🌼','🌷','🌹','🥀','🌺','🌸','💐','🌷','🌹','🌻','🌼','🌿','🍀','🍁','🍂','🍃','🌾','🌵','🎍','🎋','🎄','🌲','🌳'],
-  '太阳': ['☀️','🌞','🌤️','⛅','🌥️','☁️','🌦️','🌧️','⛈️','🌩️','❄️','🌨️','☃️','⛄','🌬️','🌀','🌪️','🌈','☂️','☔'],
-  '月亮': ['🌙','🌚','🌛','🌜','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙','⭐','🌟','💫','✨','🌌','🌠','🌌','☪️','🌍','🌎','🌏'],
-  '心': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🩷','🩵','🩶','🤎','💕','💞','💓','💗','💘','💝','💖','❣️','❤️‍🔥','❤️‍🩹','♥️','💋','💘','💝','❤️‍🩹','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💋','💌','🌹','🌷','💐'],
-  '星星': ['⭐','🌟','💫','✨','🌠','🌌','☪️','🔯','💫','✨','⭐','🌟','🌠','🌌','🌙','🌚','🌛','🌜','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙'],
-  'fire': ['🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥','🔥'],
-  'water': ['💧','💦','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊','🌊']
-};
-
-function getLocalStickers(query, limit) {
-  const q = query.toLowerCase();
-  let results = [];
-  
-  for (const [keywords, emojis] of Object.entries(localDb)) {
-    if (q.includes(keywords) || keywords.includes(q) || q === keywords) {
-      emojis.forEach(e => { results.push({ id: `local_${e}_${Math.random().toString(36).slice(2,7)}`, url: '', preview: '', description: e, isLocalEmoji: true, emojiChar: e, width: 64, height: 64 }); });
-    }
-  }
-  
-  if (results.length === 0) {
-    const fallback = ['😊','❤️','🥰','😘','🤗','💕','✨','🌟','🔥','💪','👍','🎉','🌈','🌸','🦋','🐱'];
-    results = fallback.slice(0, limit || 8).map(e => ({ id: `local_fb_${e}`, url: '', preview: '', description: e, isLocalEmoji: true, emojiChar: e, width: 64, height: 64 }));
-  }
-  
-  return results.slice(0, limit || 8);
-}
-
-app.get('/api/sticker/search', authMiddleware, async (req, res) => {
-  try {
-    const { q, page = '0', limit = '8' } = req.query;
-    const pageNum = Math.max(0, parseInt(page) || 0);
-    const limitNum = Math.min(20, Math.max(1, parseInt(limit) || 8));
-    if (!q || !q.trim()) return res.json({ stickers: [], next: false, page: 0 });
-    const query = q.trim().toLowerCase();
-    console.log(`[表情] 搜索: ${query}, 页${pageNum}, 限${limitNum}`);
-    const cacheKey = `${query}:${pageNum}:${limitNum}`;
-    const cached = getCachedStickers(cacheKey);
-    if (cached) return res.json(cached);
-    
-    let stickers = [], hasMore = false, source = 'local';
-    try {
-      let data = await tryFetchDoutula(query, limitNum, pageNum);
-      if (data.status === 1 && data.data?.list?.length > 0) {
-        stickers = data.data.list.slice(0, limitNum).map(item => ({
-          id: `doutula_${item.out_id}`, url: item.image_url, preview: item.image_url,
-          description: item.desc || '', isLocalEmoji: false, width: 0, height: 0
-        }));
-        hasMore = data.data.more === 1 && pageNum < 49;
-        source = 'doutula';
-      } else {
-        data = await tryFetchEmojiFamily(query, limitNum);
-        if (Array.isArray(data) && data.length > 0) {
-          stickers = data.slice(0, limitNum).map(item => ({
-            id: `emojifamily_${item.hexcode || item.emoji}`,
-            url: `https://www.emoji.family/api/emojis/${encodeURIComponent(item.emoji)}/noto/png/128`,
-            preview: `https://www.emoji.family/api/emojis/${encodeURIComponent(item.emoji)}/noto/png/72`,
-            description: item.annotation || item.emoji || '', isLocalEmoji: true, emojiChar: item.emoji, width: 128, height: 128
-          }));
-          hasMore = data.length > limitNum;
-          source = 'emoji-family';
-        }
-      }
-      if (stickers.length === 0) {
-        if (typeof getLocalStickers === 'function') stickers = getLocalStickers(query, limitNum);
-        source = 'local-fallback';
-      }
-    } catch (error) {
-      console.error(`[表情] API失败: ${error.message}`);
-      if (typeof getLocalStickers === 'function') stickers = getLocalStickers(query, limitNum);
-      source = 'local-fallback';
-    }
-    const result = { stickers, next: hasMore, page: pageNum, source };
-    setCachedStickers(cacheKey, result);
-    return res.json(result);
-  } catch (error) {
-    console.error('[表情] 异常:', error.message);
-    const query = (req.query.q || '').trim().toLowerCase();
-    const limitNum = Math.min(20, Math.max(1, parseInt(req.query.limit) || 8));
-    const localStickers = typeof getLocalStickers === 'function' ? getLocalStickers(query, limitNum) : [];
-    return res.json({ stickers: localStickers, next: false, page: 0, source: 'local-fallback' });
-  }
-});
-
-// 静态文件服务中间件（放在 sticker API 之后避免拦截）
+// 静态文件服务中间件（禁止访问隐藏文件如.gitignore等）
 app.use(express.static(path.join(__dirname, 'public'), { dotfiles: 'deny' }));
+
+// ==================== API 路由定义 ====================
 
 // ---------- 认证相关路由 ----------
 
@@ -680,7 +542,7 @@ app.post('/api/logout', authMiddleware, logoutHandler);
  * 获取CSRF令牌，供后续POST/PUT/DELETE请求携带
  */
 app.get('/api/csrf-token', authMiddleware, (req, res) => {
-  const token = generateCsrfToken(req.user.id);
+  const token = generateCsrfToken(req.user.user_id || req.user.id);
   res.json({ csrfToken: token });
 });
 
@@ -998,12 +860,28 @@ app.post('/api/messages', authMiddleware, validateCsrfToken, (req, res) => {
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string') return false;
   if (url.length > 500) return false;
-  if (!url.startsWith('/uploads/')) return false;
   const normalized = path.normalize(url);
   if (normalized.includes('..')) return false;
-  const filename = path.basename(url);
-  if (!filename.match(/^img_\d+_[a-f0-9]+\.\w+$/)) return false;
-  return true;
+
+  if (url.startsWith('/uploads/')) {
+    const filename = path.basename(url);
+    if (!filename.match(/^img_\d+_[a-f0-9]+\.\w+$/)) return false;
+    return true;
+  }
+
+  if (url.startsWith('/api/custom-emoji-file/')) {
+    const filename = path.basename(url);
+    if (!filename.match(/^emoji(_collected)?_\d+_[a-f0-9]+\.\w+$/)) return false;
+    return true;
+  }
+
+  if (url.startsWith('/album/')) {
+    const filename = path.basename(url);
+    if (!filename.match(/^album(_video)?_\d+_[a-f0-9]+\.\w+$/)) return false;
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1624,6 +1502,218 @@ app.put('/api/album/reorder', authMiddleware, validateCsrfToken, (req, res) => {
   } catch (err) {
     console.error('更新相册排序失败:', err);
     res.status(500).json({ error: '更新相册排序失败' });
+  }
+});
+
+// ==================== 自定义表情 API ====================
+
+/**
+ * GET /api/custom-emojis
+ * 获取当前用户的自定义表情列表
+ */
+app.get('/api/custom-emojis', authMiddleware, (req, res) => {
+  try {
+    const db = getDb();
+    const emojis = db.prepare(
+      'SELECT id, filename, original_name, file_path, file_size, source_type, created_at FROM custom_emojis WHERE user_id = ? ORDER BY created_at DESC'
+    ).all(req.user.user_id);
+    res.json({ emojis });
+  } catch (err) {
+    console.error('获取自定义表情失败:', err);
+    res.status(500).json({ error: '获取自定义表情失败' });
+  }
+});
+
+/**
+ * POST /api/custom-emojis/upload
+ * 上传自定义表情图片
+ */
+app.post('/api/custom-emojis/upload', authMiddleware, validateCsrfToken, customEmojiUpload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: '请选择要上传的图片' });
+    }
+
+    const db = getDb();
+    const result = db.prepare(
+      'INSERT INTO custom_emojis (user_id, filename, original_name, file_path, file_size, source_type) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      req.user.user_id,
+      req.file.filename,
+      req.file.originalname,
+      req.file.path,
+      req.file.size,
+      'upload'
+    );
+
+    res.json({
+      success: true,
+      emoji: {
+        id: result.lastInsertRowid,
+        filename: req.file.filename,
+        original_name: req.file.originalname,
+        file_path: req.file.path,
+        file_size: req.file.size,
+        source_type: 'upload'
+      }
+    });
+  } catch (err) {
+    console.error('上传自定义表情失败:', err);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: '上传自定义表情失败' });
+  }
+});
+
+/**
+ * POST /api/custom-emojis/collect
+ * 从聊天消息中收藏表情到自定义表情库
+ */
+app.post('/api/custom-emojis/collect', authMiddleware, validateCsrfToken, async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (!messageId) {
+      return res.status(400).json({ error: '缺少消息ID' });
+    }
+
+    const db = getDb();
+
+    const message = db.prepare('SELECT id, image_url, content FROM messages WHERE id = ?').get(messageId);
+    if (!message || !message.image_url) {
+      return res.status(400).json({ error: '该消息不包含可收藏的表情图片' });
+    }
+
+    const existingCollect = db.prepare(
+      'SELECT id FROM custom_emojis WHERE user_id = ? AND source_type = ? AND source_message_id = ?'
+    ).get(req.user.user_id, 'collect', messageId);
+
+    if (existingCollect) {
+      return res.status(400).json({ error: '该表情已收藏过' });
+    }
+
+    const ext = path.extname(message.image_url).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+      return res.status(400).json({ error: '不支持收藏该格式的图片' });
+    }
+
+    const filename = `emoji_collected_${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext}`;
+    const destPath = path.join(customEmojiDir, filename);
+
+    if (message.image_url.startsWith('/uploads/')) {
+      const sourcePath = path.join(uploadsDir, path.basename(message.image_url));
+      if (!fs.existsSync(sourcePath)) {
+        return res.status(404).json({ error: '源文件不存在，可能已被清理' });
+      }
+
+      const decryptedBuffer = decryptFileToBuffer(sourcePath);
+      if (!decryptedBuffer) {
+        return res.status(500).json({ error: '文件解密失败，无法收藏' });
+      }
+
+      fs.writeFileSync(destPath, decryptedBuffer);
+    } else if (message.image_url.startsWith('/api/custom-emoji-file/')) {
+      const sourcePath = path.join(customEmojiDir, path.basename(message.image_url));
+      if (!fs.existsSync(sourcePath)) {
+        return res.status(404).json({ error: '源文件不存在，可能已被删除' });
+      }
+
+      fs.copyFileSync(sourcePath, destPath);
+    } else {
+      return res.status(400).json({ error: '不支持收藏该来源的图片' });
+    }
+
+    const stats = fs.statSync(destPath);
+
+    const result = db.prepare(
+      'INSERT INTO custom_emojis (user_id, filename, original_name, file_path, file_size, source_type, source_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      req.user.user_id,
+      filename,
+      `collected_${path.basename(message.image_url)}`,
+      destPath,
+      stats.size,
+      'collect',
+      messageId
+    );
+
+    res.json({
+      success: true,
+      emoji: {
+        id: result.lastInsertRowid,
+        filename,
+        file_path: destPath,
+        file_size: stats.size,
+        source_type: 'collect'
+      }
+    });
+  } catch (err) {
+    console.error('收藏表情失败:', err);
+    res.status(500).json({ error: '收藏表情失败' });
+  }
+});
+
+/**
+ * DELETE /api/custom-emojis/:id
+ * 删除自定义表情
+ */
+app.delete('/api/custom-emojis/:id', authMiddleware, validateCsrfToken, (req, res) => {
+  try {
+    const emojiId = Number(req.params.id);
+    const db = getDb();
+
+    const emoji = db.prepare('SELECT id, file_path, user_id FROM custom_emojis WHERE id = ?').get(emojiId);
+    if (!emoji) {
+      return res.status(404).json({ error: '表情不存在' });
+    }
+    if (emoji.user_id !== req.user.user_id) {
+      return res.status(403).json({ error: '无权删除此表情' });
+    }
+
+    db.prepare('DELETE FROM custom_emojis WHERE id = ?').run(emojiId);
+
+    if (fs.existsSync(emoji.file_path)) {
+      fs.unlinkSync(emoji.file_path);
+    }
+
+    res.json({ success: true, message: '删除成功' });
+  } catch (err) {
+    console.error('删除自定义表情失败:', err);
+    res.status(500).json({ error: '删除自定义表情失败' });
+  }
+});
+
+/**
+ * GET /api/custom-emoji-file/:filename
+ * 提供自定义表情文件的访问服务
+ */
+app.get('/api/custom-emoji-file/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: '非法文件名' });
+    }
+
+    const filePath = path.join(customEmojiDir, filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+
+    const ext = path.extname(filename).toLowerCase();
+    const contentTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+    
+    res.setHeader('Content-Type', contentTypes[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    console.error('提供自定义表情文件失败:', err);
+    res.status(500).json({ error: '文件读取失败' });
   }
 });
 

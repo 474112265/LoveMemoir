@@ -2,58 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#fce7f3">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>💕 恋爱记事簿</title>
-  
-  <style>
-    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-    :root{--pink-50:#fdf2f8;--pink-100:#fce7f3;--pink-200:#fbcfe8;--pink-300:#f9a8d4;--pink-400:#f472b6;--pink-500:#ec4899;--rose-100:#ffe4e6;--white:#fff;--gray-400:#9ca3af;--safe-top:0px;--safe-bottom:0px}
-    @supports(padding:max(0px)){:root{--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px)}}
-    html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;background:linear-gradient(135deg,var(--pink-50) 0%,var(--rose-100) 50%,var(--pink-100) 100%);-webkit-font-smoothing:antialiased}
-    #heartCanvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
-    .login-overlay{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1000;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--pink-50) 0%,var(--rose-100) 50%,var(--pink-100) 100%);padding:16px}
-    .login-card{background:rgba(255,255,255,0.92);border-radius:24px;padding:32px 24px;width:100%;max-width:360px;box-shadow:0 20px 40px rgba(236,72,153,0.15)}
-    .login-hearts{font-size:48px;text-align:center;margin-bottom:16px}
-    .login-title{font-size:24px;font-weight:600;color:#db2777;text-align:center;margin-bottom:8px}
-    .login-subtitle{font-size:14px;color:var(--gray-400);text-align:center;margin-bottom:24px}
-    .app-container{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;height:100dvh;max-width:800px;margin:0 auto;opacity:0;transition:opacity 0.15s ease-out}
-    .app-container.visible{opacity:1}
-    .app-header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;padding-top:calc(12px + var(--safe-top));background:rgba(255,255,255,0.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--pink-100);flex-shrink:0}
-    .header-left{display:flex;align-items:center;gap:8px}
-    .header-hearts{font-size:20px}
-    .header-title{font-size:18px;font-weight:600;color:#db2777}
-    .header-right{display:flex;align-items:center;gap:8px}
-    .header-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid var(--pink-200)}
-    .current-user{font-size:14px;color:#6b7280}
-    .chat-area{flex:1;overflow-y:auto;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;position:relative}
-    .chat-area::-webkit-scrollbar{width:6px}
-    .chat-area::-webkit-scrollbar-track{background:transparent}
-    .chat-area::-webkit-scrollbar-thumb{background:var(--pink-200);border-radius:3px}
-    .chat-area::-webkit-scrollbar-thumb:hover{background:var(--pink-300)}
-    .messages-container{display:flex;flex-direction:column;gap:6px}
-    .input-area{padding:12px 16px;padding-bottom:calc(12px + var(--safe-bottom));background:rgba(255,255,255,0.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:1px solid var(--pink-100);flex-shrink:0}
-    .input-row{display:flex;align-items:flex-end;gap:6px}
-    .input-wrapper{display:flex;align-items:flex-end;gap:8px;background:#fff;border-radius:20px;padding:8px 12px;box-shadow:0 2px 12px rgba(236,72,153,0.1)}
-    #messageInput{flex:1;border:none;outline:none;font-size:16px;resize:none;max-height:100px;line-height:1.5;background:transparent}
-    .send-btn{background:linear-gradient(135deg,#f472b6,#ec4899);color:#fff;border:none;border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-    .album-btn,.email-settings-btn,.logout-btn{background:none;border:none;color:var(--pink-400);cursor:pointer;padding:4px;border-radius:50%;transition:all 0.2s;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}
-    .album-btn:hover,.email-settings-btn:hover,.logout-btn:hover{background:var(--pink-100);color:var(--pink-500)}
-    .emoji-btn{background:none;border:none;font-size:24px;cursor:pointer;padding:0 4px}
-    .page-loading{position:fixed;top:0;left:0;width:100%;height:100%;z-index:2000;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--pink-50) 0%,var(--rose-100) 50%,var(--pink-100) 100%);transition:opacity 0.2s ease-out}
-    .page-loading.hidden{opacity:0;pointer-events:none}
-    .page-loading-spinner{width:40px;height:40px;border:3px solid var(--pink-200);border-top-color:var(--pink-400);border-radius:50%;animation:spin 0.8s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-  </style>
-  
-  <link rel="stylesheet" href="/css/style.css?v=20260426e">
+  <link rel="stylesheet" href="/css/style.css?v=20260423">
 
 </head>
 <body>
-  <div id="pageLoading" class="page-loading">
-    <div class="page-loading-spinner"></div>
-  </div>
-  
   <canvas id="heartCanvas"></canvas>
 
   <div id="loginOverlay" class="login-overlay">
@@ -121,36 +75,28 @@
     <div id="emojiPicker" class="emoji-picker" style="display:none;">
       <div class="emoji-picker-header">
         <div class="emoji-tabs">
-          <button class="emoji-tab active" data-tab="emoji">表情</button>
-          <button class="emoji-tab" data-tab="search">🔍 搜索</button>
+          <button class="emoji-tab active" data-tab="default">😊 表情</button>
+          <button class="emoji-tab" data-tab="custom">🎨 我的</button>
         </div>
         <button id="closeEmojiPicker" class="emoji-close-btn">✕</button>
       </div>
-      <div class="emoji-panel emoji-panel-emoji" id="emojiPanelEmoji">
+      <div class="emoji-tab-content active" id="tabDefault">
         <div class="emoji-grid" id="emojiGrid"></div>
       </div>
-      <div class="emoji-panel emoji-panel-search" id="emojiPanelSearch" style="display:none;">
-        <div class="emoji-search-bar">
-          <svg class="emoji-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-          </svg>
-          <input type="text" id="emojiSearchInput" class="emoji-search-input" placeholder="搜索表情包..." autocomplete="off">
-          <button id="emojiSearchClear" class="emoji-search-clear" style="display:none;">✕</button>
+      <div class="emoji-tab-content" id="tabCustom" style="display:none;">
+        <div class="custom-emoji-toolbar">
+          <label class="custom-emoji-upload-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            <span>上传表情</span>
+            <input type="file" id="customEmojiInput" accept=".jpg,.jpeg,.png,.gif,.webp" style="display:none;">
+          </label>
         </div>
-        <div id="emojiSearchSuggestions" class="emoji-search-suggestions" style="display:none;"></div>
-        <div id="emojiSearchResults" class="emoji-search-results">
-          <div class="emoji-search-empty">
-            <div class="emoji-search-empty-icon">🔍</div>
-            <div class="emoji-search-empty-text">输入关键词搜索表情包</div>
-            <div class="emoji-search-empty-hint">如：开心、爱你、晚安、hello</div>
+        <div class="emoji-grid custom-emoji-grid" id="customEmojiGrid">
+          <div class="custom-emoji-empty">
+            <span>📭</span>
+            <span>还没有自定义表情</span>
+            <span>点击上方按钮上传或收藏聊天图片</span>
           </div>
-        </div>
-        <div id="emojiSearchLoading" class="emoji-search-loading" style="display:none;">
-          <div class="loading-spinner"></div>
-          <span>搜索中...</span>
-        </div>
-        <div id="emojiSearchMore" class="emoji-search-more" style="display:none;">
-          <button id="emojiSearchMoreBtn" class="emoji-search-more-btn">加载更多</button>
         </div>
       </div>
     </div>
@@ -265,25 +211,26 @@
     <div id="albumViewOverlay" class="modal-overlay" style="display:none;">
       <div class="image-view-container">
         <button id="closeAlbumView" class="image-view-close">✕</button>
-        <button id="albumVideoDownloadBtn" class="video-download-btn" style="display:none;" title="下载视频">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
-        </button>
-        <div id="albumDownloadStatus" class="video-download-status" style="display:none;">
-          <div class="download-status-content">
-            <div class="download-spinner"></div>
-            <span class="download-status-text">下载中...</span>
-            <div class="download-progress-bar">
-              <div class="download-progress-fill"></div>
-            </div>
-          </div>
-        </div>
         <div id="albumViewLoading" class="image-view-loading" style="display:none;">
           <div class="loading-spinner"></div>
           <span>加载原图中...</span>
         </div>
         <img id="albumViewImg" src="" alt="查看照片">
+      </div>
+    </div>
+
+    <div id="albumPickerModal" class="modal-overlay" style="display:none;">
+      <div class="album-modal-card">
+        <div class="modal-header">
+          <h3>📷 从相册选择</h3>
+          <button id="closeAlbumPicker" class="modal-close-btn">✕</button>
+        </div>
+        <div id="albumPickerGrid" class="album-grid">
+          <div class="album-empty">
+            <div class="album-empty-emoji">📷</div>
+            <div class="album-empty-text">还没有照片哦</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -307,6 +254,11 @@
             <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
           </svg>
         </button>
+        <button id="albumPickBtn" class="image-btn" title="从相册选择">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            <path d="M22 16V4c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2zm-11-4l2.03 2.71L16 11l4 5H8l3-4zM2 6v14c0 1.1.9 2 2 2h14v-2H4V6H2z"/>
+          </svg>
+        </button>
         <button id="sendBtn" class="send-btn" title="发送">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -324,6 +276,10 @@
     <button class="context-menu-item" data-action="edit">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
       <span>编辑</span>
+    </button>
+    <button class="context-menu-item" data-action="collectEmoji" id="collectEmojiMenuItem">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      <span>收藏表情</span>
     </button>
     <button class="context-menu-item context-menu-item-danger" data-action="delete">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -393,6 +349,6 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260426d"></script>
+  <script src="/js/app.js?v=20260429"></script>
 </body>
 </html>
